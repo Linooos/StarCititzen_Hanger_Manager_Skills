@@ -222,11 +222,150 @@ async function getTotalPages(page) {
 }
 
 // ---------------------------------------------------------------------------
-// Item Extraction
+// Value helpers
+// ---------------------------------------------------------------------------
+
+/** Extract numeric USD value from a price string like "$10.00 USD" */
+function numericValue(priceStr) {
+  if (!priceStr) return 0;
+  return parseFloat(priceStr.replace(/[^0-9.]/g, "")) || 0;
+}
+
+// ---------------------------------------------------------------------------
+// DOM Interaction
 // ---------------------------------------------------------------------------
 
 /**
- * Extract all pledge items visible on the current page.
+ * Click all expand arrows on the current page to reveal detailed item info
+ * (insurance, attached items, actual ship after upgrades, etc.).
+ * @param {Page} page
+ */
+async function expandAllItems(page) {
+  const arrows = page.locator(".js-expand-arrow");
+  const count = await arrows.count();
+  for (let i = 0; i < count; i++) {
+    try {
+      await arrows.nth(i).click();
+      await page.waitForTimeout(400);
+    } catch { /* arrow may not be clickable */ }
+  }
+  if (count > 0) await page.waitForTimeout(1000);
+}
+
+/**
+ * Click each "Upgrades" log button one at a time and extract the CCU chain.
+ * All buttons share a single .pledge-upgrade-log-rows container, so we must
+ * click → extract → click next → extract → ... sequentially.
+ *
+ * Call after expandAllItems().
+ * @param {Page} page
+ * @returns {Promise<Array<Array<Object>>>} chains[i] = upgrade chain for the i-th item with a button
+ */
+async function expandUpgradeLogs(page) {
+  const btns = page.locator(".js-upgrade-log");
+  const count = await btns.count();
+  const chains = [];
+
+  for (let i = 0; i < count; i++) {
+    try {
+      await btns.nth(i).click({ force: true, timeout: 5000 });
+      await page.waitForTimeout(2000);
+
+      // Extract the chain from the shared container
+      const chain = await page.evaluate(() => {
+        const log = document.querySelector(".pledge-upgrade-log-rows");
+        if (!log) return [];
+        const rows = log.querySelectorAll(".row");
+        const result = [];
+        rows.forEach((row) => {
+          const text = row.textContent.replace(/\s+/g, " ").trim();
+          const match = text.match(
+            /^(.+?)\s+Upgrade\s+applied:\s+#(\d+)\s+Upgrade\s*-\s*(.+?)\s+to\s+(.+?)(?:\s+(Warbond|Standard))?\s*(?:Edition)[,\s]+new value:\s+\$([0-9.]+)/
+          );
+          if (match) {
+            result.push({
+              date: match[1].trim(),
+              ccuId: match[2],
+              from: match[3].trim(),
+              to: match[4].trim(),
+              isWarbond: match[5] === "Warbond",
+              newValue: parseFloat(match[6]),
+            });
+          }
+        });
+        // Rows are newest-first, reverse to application order
+        result.reverse();
+        return result;
+      });
+
+      chains.push(chain);
+    } catch {
+      chains.push([]);
+    }
+  }
+
+  return chains;
+}
+
+/**
+ * Click the "Upgrades" button on an item to load its CCU chain via AJAX,
+ * then parse the resulting rows. Returns the chain in application order
+ * (first applied → last applied).
+ *
+ * @param {Page} page
+ * @param {number} itemIndex - 0-based index of the .js-upgrade-log button on the page
+ * @returns {Promise<Array<{date: string, ccuId: string, from: string, to: string, isWarbond: boolean, newValue: number}>>}
+ */
+async function extractUpgradeChain(page, itemIndex) {
+  const btn = page.locator(".js-upgrade-log").nth(itemIndex);
+  if (await btn.count() === 0) return [];
+
+  await btn.click();
+  // Wait for AJAX loader to finish and rows to appear
+  await page.waitForTimeout(2500);
+
+  const chain = await page.evaluate(() => {
+    const rows = document.querySelectorAll(".pledge-upgrade-log-rows .row");
+    const result = [];
+
+    rows.forEach((row) => {
+      const text = row.textContent.replace(/\s+/g, " ").trim();
+      // Parse: "Feb 02 2026, 12:35 am Upgrade applied: #101674810 Upgrade - RAFT to Hermes Warbond Edition, new value: $115.00 USD"
+      const match = text.match(
+        /^(.+?)\s+Upgrade\s+applied:\s+#(\d+)\s+Upgrade\s*-\s*(.+?)\s+to\s+(.+?)(?:\s+(Warbond|Standard))?\s*(?:Edition)[,\s]+new value:\s+\$([0-9.]+)/
+      );
+      if (match) {
+        result.push({
+          date: match[1].trim(),
+          ccuId: match[2],
+          from: match[3].trim(),
+          to: match[4].trim(),
+          isWarbond: match[5] === "Warbond",
+          newValue: parseFloat(match[6]),
+          raw: text,
+        });
+      } else {
+        result.push({ date: "", ccuId: "", from: "", to: "", isWarbond: false, newValue: 0, raw: text });
+      }
+    });
+
+    return result;
+  });
+
+  // Rows come in reverse (newest first). Reverse to get application order.
+  chain.reverse();
+
+  return chain;
+}
+
+// ---------------------------------------------------------------------------
+// Item Extraction (enhanced — v2 with CCU data)
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract all pledge items from the current page with full detail.
+ * Click expand arrows first to reveal attached items, insurance, etc.
+ *
  * @param {Page} page
  * @param {object} [opts]
  * @param {string} [opts.categoryLabel] - tag items with this category label
@@ -246,22 +385,137 @@ async function extractPageItems(page, opts = {}) {
         const el = li.querySelector("." + cls);
         return el ? el.value.trim() : "";
       };
+      const getText = (sel) => {
+        const el = li.querySelector(sel);
+        return el ? el.textContent.trim() : "";
+      };
 
+      // --- basic fields ---
       const nameEl = li.querySelector("h3");
+      const rawName = nameEl ? nameEl.textContent.trim() : getVal("js-pledge-name");
       const imgEl = li.querySelector(".image");
 
+      // --- availability & status ---
+      const availabilityEl = li.querySelector(".availability");
+      const availability = availabilityEl ? availabilityEl.textContent.trim() : "";
+      const upgraded = !!li.querySelector(".upgraded");
+
+      // --- contains / actual ship ---
+      const itemsCol = li.querySelector(".items-col");
+      const containsText = itemsCol ? itemsCol.textContent.replace(/\s+/g, " ").trim() : "";
+      // Parse "Contains: X and N items" → extract the ship name
+      let actualShip = "";
+      let containsItemCount = 0;
+      const containsMatch = containsText.match(/Contains:\s*(.+?)\s+and\s+(\d+)\s+items?/);
+      if (containsMatch) {
+        actualShip = containsMatch[1].trim();
+        containsItemCount = parseInt(containsMatch[2]);
+      }
+
+      // --- creation date ---
+      const dateCol = li.querySelector(".date-col");
+      const created = dateCol ? dateCol.textContent.replace(/Created:/, "").trim() : "";
+
+      // --- insurance extraction from full text ---
+      const fullText = li.textContent || "";
+      const insuranceItems = [];
+      const insRegex = /(Lifetime\s*Insurance|LTI|\d+\s*Month\s*Insurance)/gi;
+      let insMatch;
+      while ((insMatch = insRegex.exec(fullText)) !== null) {
+        let type = insMatch[1];
+        if (/Lifetime|LTI/i.test(type)) type = "LTI";
+        else if (/(\d+)\s*Month/i.test(type)) {
+          const months = parseInt(type.match(/\d+/)[0]);
+          type = months + "mo";
+        }
+        insuranceItems.push(type);
+      }
+
+      // --- attached items (from expanded .js-more section) ---
+      const attachedItems = [];
+      const moreSection = li.querySelector(".items.more.js-more");
+      if (moreSection) {
+        // Each sub-item is in a .content-block1 or .with-images div
+        const subItems = moreSection.querySelectorAll(".with-images");
+        subItems.forEach((sub) => {
+          const subText = sub.textContent.replace(/\s+/g, " ").trim();
+          if (subText && subText.length > 2) {
+            attachedItems.push(subText.substring(0, 200));
+          }
+        });
+      }
+
+      // --- giftable / exchangeable ---
+      const giftable = !!li.querySelector(".js-gift");
+      const exchangeable = !!li.querySelector(".js-reclaim");
+
+      // --- upgrade-specific fields ---
+      let fromShip = "";
+      let toShip = "";
+      let isWarbond = false;
+      // Parse "Upgrade - X to Y (Warbond) Edition" from name
+      const upgradeNameMatch = rawName.match(
+        /Upgrade\s*-\s*(.+?)\s+to\s+(.+?)(?:\s+(Warbond|Standard))?\s*(?:Edition)?\s*$/i
+      );
+      if (upgradeNameMatch) {
+        fromShip = upgradeNameMatch[1].trim();
+        toShip = upgradeNameMatch[2].trim();
+        isWarbond = /warbond/i.test(rawName);
+      }
+
+      // --- ship-specific image (overrides default) ---
+      const shipImage = imgEl
+        ? (imgEl.style.backgroundImage || "").replace(/url\(['"]?|['"]?\)/g, "")
+        : "";
+
+      // --- upgrade chain (populated by scrapeCategory post-processing) ---
+      const upgradeChain = [];
+
       result.push({
+        // Core
         id: getVal("js-pledge-id"),
-        name: nameEl ? nameEl.textContent.trim() : getVal("js-pledge-name"),
+        name: rawName,
+        category: options.catLabel || "",
+        categoryValue: options.catValue || "",
+
+        // Value
         value: getVal("js-pledge-value"),
+        meltValue: 0, // computed post-extraction by caller
         configValue: getVal("js-pledge-configuration-value"),
         currency: getVal("js-pledge-currency"),
         notBuybackable: getVal("js-pledge-not-buybackable") === "1",
-        image: imgEl
-          ? (imgEl.style.backgroundImage || "").replace(/url\(['"]?|['"]?\)/g, "")
-          : "",
-        category: options.catLabel || "",
-        categoryValue: options.catValue || "",
+
+        // Status
+        availability,
+        upgraded,
+        created,
+
+        // Contents
+        contains: containsText,
+        actualShip,
+        containsItemCount,
+
+        // Insurance
+        insurance: [...new Set(insuranceItems)],
+
+        // Attached items
+        attachedItems,
+        attachedCount: attachedItems.length,
+
+        // Actions
+        giftable,
+        exchangeable,
+
+        // Image
+        image: shipImage,
+
+        // Upgrade-specific (only populated for upgrade items)
+        fromShip,
+        toShip,
+        isWarbond,
+
+        // Upgrade chain (populated later by extractUpgradeChain)
+        upgradeChain: [],
       });
     });
 
@@ -274,8 +528,8 @@ async function extractPageItems(page, opts = {}) {
 // ---------------------------------------------------------------------------
 
 /**
- * Scrape all pages of a single category.
- * Opens its own page, scrapes, then closes it.
+ * Scrape all pages of a single category with full item details.
+ * Auto-expands items to capture insurance, attached items, actual ship, etc.
  *
  * @param {BrowserContext} context
  * @param {{value: string, label: string}} category
@@ -311,9 +565,30 @@ async function scrapeCategory(context, category, opts = {}) {
         await page.waitForTimeout(1000);
       }
 
+      // Expand all items to reveal detailed data
+      await expandAllItems(page);
+
+      // For ship categories, extract upgrade chains before page items
+      let upgradeChains = [];
+      const shipCategories = ["standalone_ship", "game_package"];
+      if (shipCategories.includes(category.value)) {
+        upgradeChains = await expandUpgradeLogs(page);
+      }
+
       const pageItems = await extractPageItems(page, {
         categoryLabel: category.label,
         categoryValue: category.value,
+      });
+
+      // Post-process: compute meltValue and attach upgrade chains
+      let chainIdx = 0;
+      pageItems.forEach((item) => {
+        item.meltValue = numericValue(item.value);
+        // Attach upgrade chain to items that have upgrade buttons
+        if (item.upgraded && chainIdx < upgradeChains.length) {
+          item.upgradeChain = upgradeChains[chainIdx];
+          chainIdx++;
+        }
       });
 
       items.push(...pageItems);
@@ -399,14 +674,21 @@ function exportJSON(items, filePath) {
  */
 function exportCSV(items, filePath) {
   const headers = [
-    "id", "name", "value", "configValue", "currency",
-    "notBuybackable", "category", "categoryValue", "image",
+    "id", "name", "value", "meltValue", "configValue", "currency",
+    "notBuybackable", "category", "categoryValue",
+    "actualShip", "fromShip", "toShip", "isWarbond",
+    "upgraded", "insurance", "containsItemCount",
+    "giftable", "exchangeable", "created", "image",
   ];
 
   const lines = [headers.join(",")];
   items.forEach((item) => {
     const row = headers.map((h) => {
-      const val = String(item[h] != null ? item[h] : "");
+      let val = item[h];
+      if (val == null) val = "";
+      if (Array.isArray(val)) val = val.join("; ");
+      if (typeof val === "boolean") val = val ? "1" : "0";
+      val = String(val);
       return val.includes(",") ? `"${val.replace(/"/g, '""')}"` : val;
     });
     lines.push(row.join(","));
@@ -512,8 +794,12 @@ module.exports = {
   getCategories,
   getTotalPages,
 
+  // DOM
+  expandAllItems,
+
   // Extraction
   extractPageItems,
+  extractUpgradeChain,
 
   // Scraping
   scrapeCategory,
@@ -525,6 +811,7 @@ module.exports = {
 
   // Analysis
   summarize,
+  numericValue,
 
   // High-level
   scrapeAndExport,

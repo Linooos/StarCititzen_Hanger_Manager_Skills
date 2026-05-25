@@ -95,3 +95,30 @@
 ### 6.3 通用信息
 - 机库项目的实际溶解价值（exchange value / melt value）
 - 项目赠送/活动来源标记
+
+### 6.4 升级链提取实现注意事项
+
+**DOM 结构特点：**
+- 页面中所有 `.js-upgrade-log` 按钮**共享同一个** `.pledge-upgrade-log-rows` 容器
+- 每次点击按钮会通过 AJAX 加载对应的升级链内容，**覆盖**之前的内容
+- 因此必须采用 **点击 → 等待加载 → 提取 → 点击下一个** 的顺序流程，不可批量并发
+
+**提取流程（`expandUpgradeLogs` 函数）：**
+1. 遍历所有 `.js-upgrade-log` 按钮
+2. 对每个按钮：`force click`（因 AJAX 加载导致元素位置不稳定）
+3. 等待 2 秒让 AJAX 完成
+4. 从 `.pledge-upgrade-log-rows .row` 提取链数据
+5. 保存为 `upgradeChains[i]`，继续下一个按钮
+
+**链行解析：**
+- 每行格式：`"{date} Upgrade applied: #{ccuId} Upgrade - {from} to {to} {Warbond/Standard} Edition, new value: ${value} USD"`
+- DOM 中行顺序为**最新在前**（倒序），需要 `.reverse()` 反转为应用顺序（从旧到新）
+
+**链与物品关联：**
+- `expandUpgradeLogs` 按按钮点击顺序返回 `chains[]` 数组
+- `scrapeCategory` 中遍历 `pageItems`，按 `upgraded === true` 的顺序依次匹配 `chains[chainIdx++]`
+
+**`upgradeChain` 步骤数据结构：**
+```js
+{ date, ccuId, from, to, isWarbond, newValue }
+```

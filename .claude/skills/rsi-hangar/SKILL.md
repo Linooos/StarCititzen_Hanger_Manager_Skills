@@ -129,36 +129,91 @@ The heart of the project. Every function is documented with JSDoc.
 
 - **`getCategories(page)`** — Returns `[{value, label}]` from the selectlist dropdown.
 - **`getTotalPages(page)`** — Reads max page from `.pager.clearfix` element.
-- **`extractPageItems(page, opts)`** — Parse all pledge items from the current page.
+- **`expandAllItems(page)`** — Click all expand arrows to reveal insurance, attached items, actual ship.
+- **`expandUpgradeLogs(page)`** — Click each upgrade-log button sequentially, extract CCU chains.
+  Returns `Array<Array<Step>>`. (All buttons share one DOM container — must click→extract→next.)
+- **`extractPageItems(page, opts)`** — Parse all pledge items with full detail (v2 enhanced).
+- **`extractUpgradeChain(page, itemIndex)`** — Low-level: click single button and parse its chain.
 
 ### Scraping
 
 - **`scrapeCategory(context, category, opts)`** — Scrape all pages of one category.
+  Auto-expands items and extracts CCU chains for ship categories (standalone_ship, game_package).
 - **`scrapeAll(context, opts)`** — Concurrently scrape all categories (default 4 tabs).
   Options: `concurrency`, `baseUrl`, `onProgress({category, items, total})`.
 
 ### Export & Analysis
 
 - **`exportJSON(items, filePath)`** — Write JSON file.
-- **`exportCSV(items, filePath)`** — Write CSV with UTF-8 BOM (Excel-compatible).
+- **`exportCSV(items, filePath)`** — Write CSV with UTF-8 BOM (Excel-compatible), all v2 fields.
 - **`summarize(items)`** — Returns `{byCategory, totalItems, totalValue}` grouped by category.
+- **`numericValue(priceStr)`** — Extract numeric USD from price string (e.g., `"$10.00 USD"` → `10`).
 - **`scrapeAndExport(userDataDir, outputDir, opts)`** — One-shot: launch → scrape → export.
 
-## Item data schema
+## Item data schema (v2 — enhanced)
 
 Each scraped item has these fields:
 
-| Field | Type | Example | Source in DOM |
-|-------|------|---------|--------------|
-| `id` | string | `"108071856"` | `.js-pledge-id` |
-| `name` | string | `"Upgrade - Hull A to Nova Warbond Edition"` | `h3` or `.js-pledge-name` |
-| `value` | string | `"$10.00 USD"` | `.js-pledge-value` |
-| `configValue` | string | `"$0.00 USD"` | `.js-pledge-configuration-value` |
-| `currency` | string | `"Store Credit"` | `.js-pledge-currency` |
-| `notBuybackable` | boolean | `false` | `.js-pledge-not-buybackable` |
-| `category` | string | `"Upgrades"` | From selectlist filter |
+### Core fields
+
+| Field | Type | Example | Description |
+|-------|------|---------|-------------|
+| `id` | string | `"108071856"` | Unique pledge ID |
+| `name` | string | `"Upgrade - Hull A to Nova Warbond Edition"` | Display name from h3 |
+| `category` | string | `"Upgrades"` | Human-readable category |
 | `categoryValue` | string | `"upgrade"` | URL product-type param |
-| `image` | string | `"https://media.robertsspaceindustries.com/..."` | `.image` background-image |
+
+### Value fields
+
+| Field | Type | Example | Description |
+|-------|------|---------|-------------|
+| `value` | string | `"$10.00 USD"` | Display price |
+| `meltValue` | number | `10` | Numeric USD — actual amount paid (dissolve value) |
+| `configValue` | string | `"$0.00 USD"` | Additional configuration cost |
+| `currency` | string | `"Store Credit"` | Payment method |
+| `notBuybackable` | boolean | `false` | Cannot be bought back after melt |
+
+### Status fields
+
+| Field | Type | Example | Description |
+|-------|------|---------|-------------|
+| `availability` | string | `"Attributed"` | Item status |
+| `upgraded` | boolean | `true` | Has upgrades been applied |
+| `created` | string | `"May 23, 2026"` | Acquisition date |
+| `giftable` | boolean | `true` | Can be gifted to another account |
+| `exchangeable` | boolean | `true` | Can be melted for store credit |
+
+### Content fields
+
+| Field | Type | Example | Description |
+|-------|------|---------|-------------|
+| `contains` | string | `"Contains: Ironclad and 7 items"` | Raw contains text |
+| `actualShip` | string | `"Ironclad"` | Actual ship after all upgrades (may differ from label) |
+| `containsItemCount` | number | `7` | Number of sub-items in the package |
+| `insurance` | string[] | `["LTI", "120mo"]` | Insurance types found (deduplicated) |
+| `attachedItems` | string[] | `["...", "..."]` | Sub-item descriptions |
+| `attachedCount` | number | `7` | Count of attached sub-items |
+| `image` | string | `"https://media.robertsspaceindustries.com/..."` | Item thumbnail URL |
+
+### Upgrade-specific fields (only populated for Upgrades category)
+
+| Field | Type | Example | Description |
+|-------|------|---------|-------------|
+| `fromShip` | string | `"Hull A"` | Source ship for this CCU |
+| `toShip` | string | `"Nova"` | Target ship for this CCU |
+| `isWarbond` | boolean | `true` | Discounted (Warbond) upgrade |
+| `upgradeChain` | object[] | see below | CCU chain applied to a ship (extracted automatically for ship categories) |
+
+Each `upgradeChain` step object:
+
+| Sub-field | Type | Example | Description |
+|-----------|------|---------|-------------|
+| `date` | string | `"Feb 02 2026, 12:35 am"` | When this CCU was applied |
+| `ccuId` | string | `"101674810"` | CCU pledge ID |
+| `from` | string | `"RAFT"` | Source ship |
+| `to` | string | `"Hermes"` | Target ship |
+| `isWarbond` | boolean | `true` | Discounted Warbond CCU |
+| `newValue` | number | `115` | Total ship value after this CCU was applied |
 
 ## Product categories
 
@@ -258,6 +313,73 @@ const search = (keyword) =>
   items.filter(i => i.name.toLowerCase().includes(keyword.toLowerCase()));
 ```
 
+## CCU chain analysis
+
+CCU (Cross-Chassis Upgrade) rules are documented in `docs/ccu-rules.md`.
+Read that file whenever the user asks about CCU calculations, upgrade chains,
+Warbond pricing, LTI insurance, or ship value optimization.
+
+### Core concepts
+
+- **Seed ship**: A Standalone Ship serving as the chain base. LTI (Lifetime Insurance)
+  seed ships have the highest value.
+- **Upgrade (CCU)**: Has a `fromShip` → `toShip` pair. Only applicable to the exact source ship.
+- **Warbond**: Discounted upgrade where `meltValue` < price difference between ships.
+- **Chain**: Sequence of CCUs applied to a seed ship. The final ship is determined by
+  the last CCU's `toShip`.
+- **Insurance**: Takes the highest value (LTI > 120mo > 24mo > 6mo > 3mo).
+- **Exchange/Melt**: Returns `meltValue` as store credit. Cannot buy Warbond items with credit.
+
+### Quick CCU analysis snippets
+
+```js
+const items = require("./output/hangar_items.json");
+const { numericValue } = require("./src/hangar");
+
+// List all seed ships with their actual ship, insurance, and melt value
+const seeds = items
+  .filter(i => i.category === "Standalone Ships")
+  .map(i => ({
+    id: i.id,
+    label: i.name,
+    actualShip: i.actualShip || i.name,
+    insurance: i.insurance,
+    meltValue: i.meltValue,
+    upgraded: i.upgraded,
+  }));
+console.table(seeds);
+
+// List all upgrades with from/to and warbond status
+const upgrades = items
+  .filter(i => i.category === "Upgrades")
+  .map(i => ({
+    id: i.id,
+    from: i.fromShip,
+    to: i.toShip,
+    price: i.meltValue,
+    warbond: i.isWarbond,
+  }));
+
+// Find all CCUs that lead to a specific target ship
+function pathTo(items, targetShip) {
+  return items.filter(i =>
+    i.category === "Upgrades" && i.toShip === targetShip
+  );
+}
+
+// Calculate total melt value for a seed + list of CCU IDs
+function chainCost(items, seedId, ccuIds) {
+  let total = 0;
+  const seed = items.find(i => i.id === seedId);
+  if (seed) total += seed.meltValue;
+  ccuIds.forEach(cid => {
+    const ccu = items.find(i => i.id === cid);
+    if (ccu) total += ccu.meltValue;
+  });
+  return total;
+}
+```
+
 ## Extending the project
 
 When asked to add new functionality:
@@ -309,3 +431,4 @@ module.exports = { ..., extractValue };
 | Cloudflare Code 4237 | Bot detection triggered | Use headed mode, solve CAPTCHA manually |
 | Empty category results | No items in that category | Normal — some categories may be empty |
 | Scraper gets 0 items | Session expired | Run `npm run login` first to refresh session |
+| Upgrade chains empty (`upgradeChain: []`) | `expandUpgradeLogs` not called before extraction, or buttons share one container and only last one loaded | Ensure `scrapeCategory` flow: expandAllItems → expandUpgradeLogs → extractPageItems. All buttons share ONE `.pledge-upgrade-log-rows` — must click→extract→next sequentially |
