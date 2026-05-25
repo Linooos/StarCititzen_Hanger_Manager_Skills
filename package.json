@@ -6,7 +6,9 @@
   "scripts": {
     "login": "node src/login.js",
     "scrape": "node src/scrape.js",
-    "scrape:headless": "node src/scrape.js --headless"
+    "scrape:headless": "node src/scrape.js --headless",
+    "scrape:ships": "node src/scrape-ships.js",
+    "scrape:ships:headless": "node src/scrape-ships.js --headless"
   },
   "dependencies": {
     "playwright": "^1.60.0"

@@ -105,7 +105,8 @@ until the session expires (typically weeks).
 | `npm run login` | Interactive login — opens Chrome, waits for user to complete 2FA, saves session |
 | `npm run scrape` | Scrape all MY GEAR items with concurrent tabs, export to output/ |
 | `npm run scrape:headless` | Same as scrape but background (no visible browser) |
-| `node src/scrape.js --headless` | CLI with flags: `--headless`, `--json-only` |
+| `npm run scrape:ships` | Scrape ship catalog — clicks each manufacturer, gets prices + roles |
+| `npm run scrape:ships:headless` | Ship catalog in headless mode |
 
 All scripts must be run from the **project root** (`cd` to it first).
 
@@ -287,6 +288,160 @@ await cleanup();
 
 ### Common analysis tasks
 
+## CCU Chain Calculator (`src/ccu.js`)
+
+The steward's core intelligence. Given a target ship, finds the cheapest upgrade path
+from the player's owned seed ships using their available CCUs.
+
+### Module API
+
+- **`matchShip(name, catalog)`** — Fuzzy-match a ship name to the catalog.
+- **`findBestPath(opts)`** — **Main entry point.** Uses Dijkstra on complete price graph.
+  Includes gaps (full-price edges where no CCU is owned).
+  Options: `{targetShip, projectRoot, seedShipIds?, excludeIds?}`.
+- **`findCheapestChain(opts)`** — Legacy: only uses owned CCUs (no gaps). Returns 0 chains if path incomplete.
+- **`listReachableTargets(opts)`** — List ships reachable via owned CCUs only.
+- **`formatChainTable(chain)`** — 8-column markdown table with gap support.
+- **`formatResults(result)`** — Full result with best chains ranked by cost.
+
+### Interactive workflow
+
+When the user asks to create a CCU chain to a target ship:
+
+#### Step 1: Confirm target
+
+Look up the target in `output/ships.json` using `matchShip()`. If multiple variants
+exist (e.g. "Constellation" matches 4 ships), list them all and ask the user to pick.
+Show the store price for each.
+
+```
+I found several ships matching "Constellation":
+  1. Constellation-Andromeda — $240
+  2. Constellation-Aquila — $315
+  3. Constellation-Phoenix — $350
+  4. Constellation-Taurus — $200
+Which one is your target?
+```
+
+#### Step 2: Choose seed ship
+
+Load `output/hangar_items.json`, filter by `category === "Standalone Ships"`.
+Present the user with their seed ship options:
+
+```
+Your hangar has these standalone ships (seed ships):
+  1. UTV — melt: $35, insurance: LTI
+  2. RAFT — melt: $105, insurance: LTI, 120mo
+  3. Dragonfly Black — melt: $0, insurance: LTI
+  4. Ironclad — melt: $175, insurance: LTI, 120mo (upgraded)
+  5. F7A Hornet Mk II — melt: $110, insurance: LTI, 120mo (upgraded)
+  6. Polaris — melt: $350, insurance: LTI, 120mo (upgraded)
+Enter the numbers you want to use as seeds (e.g. "1,4,5"), or "all":
+```
+
+#### Step 3: Exclusions
+
+Ask if any upgrades should be excluded (e.g. the user wants to keep a specific CCU):
+
+```
+Any upgrade IDs to exclude? (comma-separated, or "none"):
+```
+
+#### Step 4: Disclaimer
+
+Always state before showing results:
+
+```
+⚠️ This is a simulation only. No upgrades will be deployed automatically.
+You must apply each CCU manually in your hangar.
+```
+
+#### Step 5: Run and display
+
+Call `findBestPath()` (含断层的最优路径) with the user's choices.
+Display with `formatChainTable()`.
+
+### Output table format (8 columns)
+
+Always use this exact format:
+
+```
+| # | From | To | From Value | To Value | CCU Cost | Source | Note |
+|---|------|----|-----------|---------|----------|--------|------|
+```
+
+**Column definitions:**
+- `#` — 步骤序号
+- `From` / `To` — 船只名称
+- `From Value` / `To Value` — 商店标价
+- `CCU Cost` — 此步实际花费
+- `Source` — 自有 CCU 填 ID（如 `#108071856`），断层填 `—`
+- `Note` — Warbond 填 `Warbond`，断层填 `⚠️ 无可用CCU`，否则留空
+
+### Chain gap rule (断层规则)
+
+当玩家机库中**没有**从 A→B 的可用 CCU 时，该段视为断层：
+- `From` / `To` = 断层两端的船只
+- `CCU Cost` = To Value − From Value（全额差价，无折扣）
+- `Source` = `—`
+- `Note` = `⚠️ 无可用CCU`
+
+断层意味着玩家需要从 pledge store 以**原价购买**该升级包。
+
+### Example: 含断层链
+
+```
+| # | From    | To              | From Value | To Value | CCU Cost | Source     | Note          |
+|---|---------|-----------------|-----------|----------|----------|------------|---------------|
+| 1 | RAFT    | Defender        | $190      | $220     | $30      | —          | ⚠️ 无可用CCU |
+| 2 | Defender| 400i            | $220      | $250     | $10      | #67278416  | Warbond       |
+| 3 | 400i    | Meteor          | $250      | $260     | $10      | —          | ⚠️ 无可用CCU |
+| 4 | Meteor  | M80             | $260      | $300     | $15      | #107425528 | Warbond       |
+| 5 | M80     | Hull-C          | $300      | $500     | $200     | —          | ⚠️ 无可用CCU |
+|   | **TOTALS** |              |           | **$500** | **$265** |            |               |
+```
+
+### Example: 全自有 CCU 链（无断层）
+
+```
+| # | From      | To          | From Value | To Value | CCU Cost | Source     | Note    |
+|---|----------|-------------|-----------|----------|----------|------------|---------|
+| 1 | MDC      | Nomad       | $60       | $80      | $10      | #101674275 |         |
+| 2 | Nomad    | Storm       | $80       | $90      | $5       | #101671839 | Warbond |
+| 3 | Storm    | Storm AA    | $90       | $105     | $10      | #85662817  | Warbond |
+| 4 | Storm AA | Nova        | $105      | $120     | $15      | #93948075  | Warbond |
+| 5 | Nova     | Cutlass Red | $120      | $150     | $10      | #93513371  |         |
+|   | **TOTALS** |            |           | **$150** | **$50**  |            |         |
+```
+
+### 统计行（表格下方）
+
+```
+- **种子船熔解价值 (Seed melt)**: $105
+- **自有 CCU 实际成本**: $25
+- **断层需购买成本 (Gap cost)**: $240
+- **总实际成本 (Total actual cost)**: $370
+- **最终船只价值 (Final ship value)**: $500
+- **节省 (Savings)**: $130 (1.35x value)
+```
+
+当链中存在断层时，分别统计自有 CCU 成本和断层购买成本。
+当链中无断层时，省略 "断层需购买成本" 行。
+
+### Programmatic usage
+
+```js
+const { findCheapestChain, formatResults } = require("./src/ccu");
+
+const result = findCheapestChain({
+  targetShip: "Constellation-Phoenix",
+  projectRoot: ".",
+  excludeIds: ["108071856"], // optional: skip specific CCUs
+});
+
+console.log(formatResults(result));
+```
+
 To analyze data, read `output/hangar_items.json` with Node.js:
 
 ```js
@@ -378,6 +533,60 @@ function chainCost(items, seedId, ccuIds) {
   });
   return total;
 }
+```
+
+## Ship Catalog (`src/ships.js`)
+
+Scrapes the pledge store (`https://robertsspaceindustries.com/en/pledge/ships`)
+by clicking each manufacturer filter in the carousel and iterating pagination.
+Outputs to `output/ships.json` + `output/ships.csv`.
+
+### Module API
+
+- **`getManufacturers(page)`** — Returns `[{name, index}]` from carousel.
+- **`extractShipCards(page)`** — Parse ship cards from `.shipsList-cardStack__grid`.
+- **`getTotalShipPages(page)`** — Read `.orion-c-pagination` for page count.
+- **`scrapeAllShips(context)`** — Click each manufacturer button, scrape all their ships.
+- **`exportJSON(ships, path)`**, **`exportCSV(ships, path)`** — Write output files.
+
+### Ship data schema
+
+| Field | Type | Example | Description |
+|-------|------|---------|-------------|
+| `name` | string | `"Avenger-Titan"` | Ship display slug |
+| `manufacturer` | string | `"Aegis Dynamics"` | Manufacturer name |
+| `manufacturerSlug` | string | `"aegis-avenger"` | URL series slug |
+| `price` | number | `55.00` | Store price in USD |
+| `crew` | number | `1` | Max crew |
+| `status` | string | `"Flight Ready"` | Development status |
+| `roles` | string[] | `["Light Fighter", "Starter"]` | Ship roles |
+| `slug` | string | `"Avenger-Titan"` | URL slug |
+| `url` | string | `"https://robertsspaceindustries.com/pledge/ships/..."` | Detail page URL |
+
+### Manufacturer filter mechanism
+
+The carousel tabs are `<button>` elements inside `.swiper-slide`. Clicking a button
+updates the URL with `?manufacturerId=N` and filters the ship grid. The scraper
+clicks each button sequentially (indices 1..N, skipping index 0 "All Manufacturers"),
+reads pagination, and extracts ships. All ships are tagged with the manufacturer
+name and deduplicated by `href`.
+
+### Analysis snippet
+
+```js
+const ships = require("./output/ships.json");
+
+// Find cheapest LTI token (starter ships)
+const cheap = ships
+  .filter((s) => s.price > 0 && s.price <= 50)
+  .sort((a, b) => a.price - b.price);
+console.table(cheap.map((s) => ({ name: s.name, price: s.price, mfr: s.manufacturer })));
+
+// Ships by manufacturer
+const byMfr = {};
+ships.forEach((s) => {
+  byMfr[s.manufacturer] = (byMfr[s.manufacturer] || 0) + 1;
+});
 ```
 
 ## Extending the project
