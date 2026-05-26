@@ -1,9 +1,9 @@
 /**
- * RSI Hangar Module
+ * RSI Hangar Module / 星际公民机库爬取核心模块
  *
- * Reusable library for scraping the RSI "MY GEAR" hangar page.
- * Handles browser launch, category discovery, paginated scraping,
- * data export (JSON/CSV), and summary statistics.
+ * 功能：浏览器管理、交互登录、分类发现、翻页爬取、数据导出
+ * Features: browser lifecycle, interactive login, category discovery,
+ *           paginated scraping, JSON/CSV export, summary statistics.
  *
  * @module hangar
  */
@@ -12,9 +12,9 @@ const { chromium } = require("playwright");
 const fs = require("fs");
 const path = require("path");
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// 常量 / Constants
+// ===========================================================================
 
 const BASE_URL = "https://robertsspaceindustries.com/en/account/pledges";
 const LOGIN_URL = "https://robertsspaceindustries.com/en/sign-in";
@@ -23,8 +23,7 @@ const DEFAULT_VIEWPORT = { width: 1280, height: 800 };
 const DEFAULT_LOGIN_TIMEOUT_MIN = 10;
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+// 工具函数 / Helpers
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -46,8 +45,7 @@ async function asyncPool(limit, tasks, fn) {
 }
 
 // ---------------------------------------------------------------------------
-// Browser
-// ---------------------------------------------------------------------------
+// 浏览器 / Browser
 
 /**
  * Launch a persistent Chromium context with the user's RSI session.
@@ -84,8 +82,7 @@ async function launchContext(userDataDir, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Login
-// ---------------------------------------------------------------------------
+// 登录 / Login
 
 /**
  * Open browser to RSI sign-in page and wait for the user to log in.
@@ -173,8 +170,7 @@ async function saveSession(context, page, outputDir) {
 }
 
 // ---------------------------------------------------------------------------
-// Category Discovery
-// ---------------------------------------------------------------------------
+// 分类发现 / Category Discovery
 
 /**
  * Extract available product-type categories from the hangar page selectlist.
@@ -200,8 +196,7 @@ async function getCategories(page) {
 }
 
 // ---------------------------------------------------------------------------
-// Pagination
-// ---------------------------------------------------------------------------
+// 翻页 / Pagination
 
 /**
  * Get total page count from the pager element.
@@ -222,8 +217,7 @@ async function getTotalPages(page) {
 }
 
 // ---------------------------------------------------------------------------
-// Value helpers
-// ---------------------------------------------------------------------------
+// 价值计算 / Value helpers
 
 /** Extract numeric USD value from a price string like "$10.00 USD" */
 function numericValue(priceStr) {
@@ -232,8 +226,7 @@ function numericValue(priceStr) {
 }
 
 // ---------------------------------------------------------------------------
-// DOM Interaction
-// ---------------------------------------------------------------------------
+// DOM 交互 / DOM Interaction
 
 /**
  * Click all expand arrows on the current page to reveal detailed item info
@@ -359,8 +352,7 @@ async function extractUpgradeChain(page, itemIndex) {
 }
 
 // ---------------------------------------------------------------------------
-// Item Extraction (enhanced — v2 with CCU data)
-// ---------------------------------------------------------------------------
+// 物品提取（v2 增强版，含 CCU 数据）/ Item Extraction (enhanced v2)
 
 /**
  * Extract all pledge items from the current page with full detail.
@@ -524,8 +516,7 @@ async function extractPageItems(page, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Category Scraping
-// ---------------------------------------------------------------------------
+// 分类爬取 / Category Scraping
 
 /**
  * Scrape all pages of a single category with full item details.
@@ -603,8 +594,7 @@ async function scrapeCategory(context, category, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Bulk Scraping
-// ---------------------------------------------------------------------------
+// 批量爬取 / Bulk Scraping
 
 /**
  * Scrape all categories concurrently. Returns deduplicated, classified items.
@@ -655,8 +645,7 @@ async function scrapeAll(context, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Export
-// ---------------------------------------------------------------------------
+// 导出 / Export
 
 /**
  * Export items to JSON file.
@@ -698,8 +687,7 @@ function exportCSV(items, filePath) {
 }
 
 // ---------------------------------------------------------------------------
-// Summary
-// ---------------------------------------------------------------------------
+// 汇总 / Summary
 
 /**
  * Generate a summary of items grouped by category.
@@ -730,8 +718,7 @@ function summarize(items) {
 }
 
 // ---------------------------------------------------------------------------
-// Combined: one-call scrape + export
-// ---------------------------------------------------------------------------
+// 一键爬取+导出 / Combined scrape+export
 
 /**
  * High-level helper: scrape the hangar and export to JSON + CSV.
@@ -775,8 +762,7 @@ async function scrapeAndExport(userDataDir, outputDir, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Exports
-// ---------------------------------------------------------------------------
+// 模块导出 / Exports
 
 module.exports = {
   // Constants

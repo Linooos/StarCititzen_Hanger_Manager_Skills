@@ -1,9 +1,8 @@
 /**
- * RSI Ship Catalog Module
+ * RSI Ship Catalog Module / 星际公民船只目录模块
  *
- * Scrapes the pledge store ship catalog for all ship names, prices,
- * manufacturers, roles, and crew counts.
- * Clicks each manufacturer filter in the carousel to get per-manufacturer data.
+ * 逐厂商点击轮播标签翻页爬取全部船只数据
+ * Clicks each manufacturer filter in the carousel, iterates pagination.
  *
  * @module ships
  */

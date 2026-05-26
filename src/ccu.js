@@ -1,5 +1,12 @@
 /**
- * CCU Chain Calculator v5 — Greedy Local-Chain Algorithm (11 Steps)
+ * CCU Chain Calculator / CCU 升级链计算器 v5
+ *
+ * 11 步贪心局部链算法：
+ *   analyzeUpgrades → buildLocalChains → precompute
+ *   findBestChain(seed, target, excludeIds) → formatTable
+ *
+ * 可配置权重：setWeights(valueSpanWeight, savingsWeight)
+ *
  * @module ccu
  */
 const fs = require("fs"); const path = require("path");
@@ -38,7 +45,7 @@ function loadHangar(root) { return JSON.parse(fs.readFileSync(path.join(root,"ou
 function loadCatalog(root) { return JSON.parse(fs.readFileSync(path.join(root,"output","ships.json"),"utf-8")); }
 function loadAnalysis(root) { const p = path.join(root,"output","ccu_analysis.json"); return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p,"utf-8")) : null; }
 
-// STEP 1
+// 第一步：升级包分析 / Step 1: Upgrade Analysis
 function analyzeUpgrades(root) {
   const hangar = loadHangar(root); const catalog = loadCatalog(root);
   const pm = {}; catalog.forEach(s => { pm[s.name] = s.price; });
@@ -55,7 +62,7 @@ function analyzeUpgrades(root) {
   return result;
 }
 
-// STEP 2
+// 第二步：构建局部链 / Step 2: Build Local Chains
 function buildLocalChains(upgrades) {
   const deduped = []; const seen = new Set();
   upgrades.forEach(u => { const k = u.fromShip+"|"+u.toShip+"|"+u.actualCost; if (!seen.has(k)) { seen.add(k); deduped.push(u); } });
@@ -97,7 +104,7 @@ function _extendBackward(chain, upgrades, byTo) {
   const r=[]; cands.forEach(ci => { _extendBackward([ci, ...chain], upgrades, byTo).forEach(b => r.push(b)); }); return r;
 }
 
-// STEP 3-4
+// 第三四步：孤立升级包 + 预计算 / Steps 3-4: Isolated + Precompute
 function findIsolated(upgrades, chains) { const ic = new Set(); chains.forEach(c => c.steps.forEach(s => ic.add(s.id))); return upgrades.filter(u => !ic.has(u.id)); }
 function precompute(root) {
   console.log("  [CCU] Analyzing upgrades...");
@@ -121,7 +128,7 @@ function precompute(root) {
   return data;
 }
 
-// STEPS 5-10
+// 第五至十步：总链条组装 / Steps 5-10: Chain Assembly
 function findBestChain(opts={}) {
   const {seedShip,targetShip,projectRoot:root=".",excludeIds=[]}=opts;
   const exSet=new Set(excludeIds);
@@ -201,7 +208,7 @@ function findBestChain(opts={}) {
 function _shipPrice(n,c){const m=matchShip(n,c);return m?m.price:0;}
 function _makeChain(seed,a){return{seed,steps:a.steps,totalMelt:a.totalMelt,finalValue:a.finalValue,savings:a.savings,efficiency:a.efficiency,hasGaps:a.hasGaps,ownedCost:a.ownedCost,gapCost:a.gapCost};}
 
-// STEP 11
+// 第一步：升级包分析 / Step 1: Upgrade Analysis1
 function formatChainTable(chain){
   const{seed,steps,totalMelt,finalValue,savings,efficiency,hasGaps,ownedCost,gapCost}=chain;const l=[];
   l.push("",`**Seed Ship**: ${seed.actualShip} (${seed.label})`,`  Melt: $${seed.meltValue} | Insurance: ${seed.insurance.join(", ")}`,"");
