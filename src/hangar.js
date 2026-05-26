@@ -764,6 +764,29 @@ async function scrapeAndExport(userDataDir, outputDir, opts = {}) {
 // ---------------------------------------------------------------------------
 // 模块导出 / Exports
 
+/**
+ * 检查会话是否有效 / Check if session is still valid
+ * 过期时页面显示 "Access denied" 且无物品数据
+ */
+async function checkSession(context) {
+  const page = await context.newPage();
+  try {
+    await page.goto(BASE_URL, { waitUntil: "domcontentloaded", timeout: 15000 });
+    await page.waitForTimeout(2000);
+    const info = await page.evaluate(() => {
+      const title = document.title;
+      const pledgeCount = document.querySelectorAll(".js-pledge-id").length;
+      return { title, pledgeCount, url: location.href };
+    });
+    // 会话有效：有 pledge 数据 或 不在 denied/sign-in 页面
+    if (info.pledgeCount > 0) return true;
+    if (info.title.includes("Access denied")) return false;
+    if (info.url.includes("/sign-in") || info.url.includes("/login")) return false;
+    return false; // 空页面也视为过期
+  } catch { return false; }
+  finally { await page.close(); }
+}
+
 module.exports = {
   // Constants
   BASE_URL,
@@ -775,6 +798,7 @@ module.exports = {
   // Login
   login,
   saveSession,
+  checkSession,
 
   // Discovery
   getCategories,

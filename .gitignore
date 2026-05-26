@@ -3,3 +3,5 @@ user_data/
 output/
 *.log
 .env
+cookies.json
+local_storage.json

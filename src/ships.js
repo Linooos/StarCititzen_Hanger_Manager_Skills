@@ -1,233 +1,161 @@
 /**
- * RSI Ship Catalog Module / 星际公民船只目录模块
- *
- * 逐厂商点击轮播标签翻页爬取全部船只数据
- * Clicks each manufacturer filter in the carousel, iterates pagination.
- *
+ * RSI Ship Catalog — Matrix URLs + Store Prices / 船只目录模块
  * @module ships
  */
-
 const { launchContext } = require("./hangar");
 const fs = require("fs");
 const path = require("path");
 
-// Navigate without sale param to include unavailable ships (needed for CCU calcs)
-const SHIPS_URL = "https://robertsspaceindustries.com/en/pledge/ships?sortField=name&sortDirection=asc";
+const MATRIX_URL = "https://robertsspaceindustries.com/en/ship-matrix";
+const STORE_URL = "https://robertsspaceindustries.com/en/pledge/ships?sortField=name&sortDirection=asc";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+// 并发控制 / Concurrency limiter
+async function pool(limit, tasks, fn) {
+  const results = [], running = new Set();
+  for (const t of tasks) {
+    const p = Promise.resolve().then(() => fn(t));
+    results.push(p); running.add(p);
+    p.finally(() => running.delete(p));
+    if (running.size >= limit) await Promise.race(running);
+  }
+  return Promise.all(results);
 }
 
-// ---------------------------------------------------------------------------
-// Manufacturer list from carousel
-// ---------------------------------------------------------------------------
-
-async function getManufacturers(page) {
+// ===========================================================================
+// 数据源 1：Ship Matrix → 全部船只 URL/名称
+// ===========================================================================
+async function fetchMatrix(page) {
+  await page.goto(MATRIX_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await page.waitForTimeout(8000);
   return page.evaluate(() => {
-    const slides = document.querySelectorAll(
-      ".c-storeSubNavigationCarousel__carousel .swiper-slide"
-    );
-    return Array.from(slides)
-      .map((s, i) => ({ name: s.textContent.trim(), index: i }))
-      .filter((m) => m.name !== "All Manufacturers" && m.name.length > 0);
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Ship card extraction from grid
-// ---------------------------------------------------------------------------
-
-async function extractShipCards(page) {
-  return page.evaluate(() => {
-    const grid = document.querySelector(".shipsList-cardStack__grid");
-    if (!grid) return [];
-    const result = [];
-
-    for (const card of grid.children) {
-      const text = card.textContent.replace(/\s+/g, " ").trim();
-      const links = card.querySelectorAll("a");
-      const href = links.length > 0 ? links[0].getAttribute("href") : "";
-
-      const statusMatch = text.match(/^(\w[\w\s-]+?)(?=Max crew:)/);
-      const crewMatch = text.match(/Max crew:\s*(\d+)/);
-      const priceMatch = text.match(/\$([\d,]+(?:\.\d{2})?)\s*USD/);
-      const shipValueIdx = text.indexOf("Ship Value");
-
-      let name = "", manufacturerSlug = "";
-      if (href) {
-        const parts = href.replace("/pledge/ships/", "").split("/");
-        if (parts.length >= 2) { manufacturerSlug = parts[0]; name = parts[1]; }
-      }
-
-      let rolesText = "";
-      if (crewMatch && shipValueIdx > 0) {
-        const afterCrew = text.indexOf(crewMatch[0]) + crewMatch[0].length;
-        rolesText = text.substring(afterCrew, shipValueIdx).trim();
-        if (name) {
-          const ni = rolesText.lastIndexOf(name);
-          if (ni > 0) rolesText = rolesText.substring(0, ni).trim();
-        }
-      }
-
-      const roles = rolesText
-        ? rolesText.split(/\s*\/\s*/).map((r) => r.trim()).filter((r) => r.length > 0)
-        : [];
-
-      const price = priceMatch ? parseFloat(priceMatch[1].replace(/,/g, "")) : 0;
-
-      result.push({
-        name, manufacturer: "", manufacturerSlug, price,
-        crew: crewMatch ? parseInt(crewMatch[1]) : 0,
-        status: statusMatch ? statusMatch[1].trim() : "",
-        roles, slug: name, href,
-        url: href ? "https://robertsspaceindustries.com" + href : "",
+    const seen = new Set();
+    const ships = [];
+    document.querySelectorAll('#statsapp a[href*="/pledge/ships/"]').forEach(a => {
+      const href = a.getAttribute("href");
+      if (seen.has(href)) return;
+      seen.add(href);
+      const parts = href.replace("/pledge/ships/", "").split("/");
+      ships.push({
+        href, slug: parts.pop(), series: parts[0] || "",
+        name: parts[parts.length - 1] || parts[0] || "",
+        price: 0, manufacturer: "", url: "https://robertsspaceindustries.com" + href,
       });
-    }
-    return result;
+    });
+    return ships;
   });
 }
 
-// ---------------------------------------------------------------------------
-// Pagination on catalog
-// ---------------------------------------------------------------------------
-
-async function getTotalShipPages(page) {
-  return page.evaluate(() => {
-    const items = document.querySelectorAll(".orion-c-pagination__item");
+// ===========================================================================
+// 数据源 2：Pledge Store 翻页 → 并发获取价格
+// ===========================================================================
+async function fetchPrices(context) {
+  // 获取总页数
+  const p1 = await context.newPage();
+  await p1.goto(STORE_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await p1.waitForTimeout(5000);
+  const total = await p1.evaluate(() => {
     let max = 1;
-    items.forEach((item) => {
-      const link = item.querySelector(".orion-c-pagination__link");
-      if (link) { const n = parseInt(link.textContent.trim()); if (!isNaN(n) && n > max) max = n; }
+    document.querySelectorAll(".orion-c-pagination__link").forEach(l => {
+      const n = parseInt(l.textContent.trim());
+      if (n > max) max = n;
     });
     return max;
   });
-}
+  await p1.close();
+  console.log(`  Store pages: ${total}`);
 
-// ---------------------------------------------------------------------------
-// Main Scraper: click each manufacturer, scrape their ships
-// ---------------------------------------------------------------------------
-
-async function scrapeAllShips(context, opts = {}) {
-  // Step 1: Get manufacturer list
-  const initPage = await context.newPage();
-  await initPage.goto(SHIPS_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
-  await initPage.waitForTimeout(5000);
-  const manufacturers = await getManufacturers(initPage);
-  console.log(`  Manufacturers: ${manufacturers.length}`);
-
-  // Step 2: For each manufacturer, click its button, scrape all pages
-  const seen = new Set();
-  const allShips = [];
-
-  for (const mfr of manufacturers) {
-    // Navigate back to base URL to reset filters
-    if (mfr.index > 0) {
-      // Click the manufacturer button
-      const btn = initPage
-        .locator(".c-storeSubNavigationCarousel__carousel .swiper-slide")
-        .nth(mfr.index)
-        .locator("button");
-      if (await btn.count() > 0) {
-        await btn.click({ timeout: 5000 });
-        await initPage.waitForTimeout(3000);
-      }
-    }
-
-    const totalPages = await getTotalShipPages(initPage);
-    const mfrShips = [];
-
-    for (let pg = 1; pg <= totalPages; pg++) {
-      if (pg > 1) {
-        // Navigate to page within this manufacturer filter
-        const currentUrl = new URL(initPage.url());
-        currentUrl.searchParams.set("page", String(pg));
-        await initPage.goto(currentUrl.toString(), {
-          waitUntil: "domcontentloaded", timeout: 30000,
+  // 并发翻页 / Concurrent page scraping
+  const pages = Array.from({ length: total }, (_, i) => i + 1);
+  const chunks = await pool(4, pages, async (pg) => {
+    const p = await context.newPage();
+    try {
+      await p.goto(`${STORE_URL}&page=${pg}`, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await p.waitForTimeout(1500);
+      return await p.evaluate(() => {
+        const grid = document.querySelector(".shipsList-cardStack__grid");
+        if (!grid) return [];
+        return Array.from(grid.children).map(card => {
+          const a = card.querySelector("a");
+          const href = a ? a.getAttribute("href") : "";
+          const m = card.textContent.match(/\$([\d,]+(?:\.\d{2})?)\s*USD/);
+          return { href, price: m ? parseFloat(m[1].replace(/,/g, "")) : 0 };
         });
-        await initPage.waitForTimeout(2000);
-      }
+      });
+    } catch { return []; }
+    finally { await p.close(); }
+  });
 
-      const ships = await extractShipCards(initPage);
-      mfrShips.push(...ships);
-      if (ships.length === 0) break;
-      if (pg < totalPages) await sleep(800);
-    }
-
-    // Tag ships with manufacturer
-    mfrShips.forEach((s) => {
-      s.manufacturer = mfr.name;
-      if (!seen.has(s.href)) {
-        seen.add(s.href);
-        allShips.push(s);
-      }
-    });
-
-    console.log(`  [${mfr.name}] ${mfrShips.length} ships (${totalPages} pages)`);
-  }
-
-  await initPage.close();
-  return allShips;
+  // 合并 / Merge
+  const map = {};
+  chunks.flat().forEach(s => { if (s.href && s.price > 0 && !map[s.href]) map[s.href] = s.price; });
+  console.log(`  Priced from store: ${Object.keys(map).length}`);
+  return map;
 }
 
-// ---------------------------------------------------------------------------
-// Export
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// 数据源 3：缺价船补全（并发查单个页面）
+// ===========================================================================
+async function fillMissing(context, ships) {
+  const need = ships.filter(s => s.price <= 0);
+  if (!need.length) return;
+  console.log(`  Fallback: ${need.length} ships...`);
 
-function exportJSON(data, filePath) {
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+  let done = 0;
+  await pool(3, need, async (s) => {
+    const p = await context.newPage();
+    try {
+      await p.goto(s.url, { waitUntil: "domcontentloaded", timeout: 15000 });
+      await p.waitForTimeout(1000);
+      const price = await p.evaluate(() => {
+        const m = document.body.textContent.match(/\$([\d,]+(?:\.\d{2})?)\s*USD/);
+        return m ? parseFloat(m[1].replace(/,/g, "")) : 0;
+      });
+      if (price > 0) { s.price = price; done++; }
+    } catch {}
+    finally { await p.close(); }
+  });
+  console.log(`    Recovered: ${done}`);
 }
 
-function exportCSV(ships, filePath) {
-  const headers = [
-    "name", "manufacturer", "manufacturerSlug", "price", "crew",
-    "status", "roles", "slug", "url",
-  ];
-  const lines = [headers.join(",")];
-  ships.forEach((s) => {
-    const row = headers.map((h) => {
-      let val = s[h];
-      if (val == null) val = "";
-      if (Array.isArray(val)) val = val.join("; ");
-      val = String(val);
-      return val.includes(",") ? `"${val.replace(/"/g, '""')}"` : val;
-    });
+// ===========================================================================
+// 主流程 / Main
+// ===========================================================================
+async function scrapeAllShips(context) {
+  const mp = await context.newPage();
+  console.log("  Matrix: fetching...");
+  const ships = await fetchMatrix(mp);
+  await mp.close();
+  console.log(`  Matrix: ${ships.length} ships`);
+
+  const priceMap = await fetchPrices(context);
+  ships.forEach(s => { if (priceMap[s.href]) s.price = priceMap[s.href]; });
+  console.log(`  Merged: ${ships.filter(s=>s.price>0).length}/${ships.length} priced`);
+
+  await fillMissing(context, ships);
+
+  return ships;
+}
+
+// 导出 / Export
+function exportJSON(data, fp) { fs.writeFileSync(fp, JSON.stringify(data, null, 2)); }
+function exportCSV(ships, fp) {
+  const h = ["name","manufacturer","series","price","slug","url"];
+  const lines = [h.join(",")];
+  ships.forEach(s => {
+    const row = h.map(k => { let v = s[k]||""; if (Array.isArray(v)) v = v.join("; "); v = String(v); return v.includes(",") ? `"${v.replace(/"/g,'""')}"` : v; });
     lines.push(row.join(","));
   });
-  fs.writeFileSync(filePath, "﻿" + lines.join("\n"), "utf-8");
+  fs.writeFileSync(fp, "﻿" + lines.join("\n"), "utf-8");
 }
-
-// ---------------------------------------------------------------------------
-// High-level
-// ---------------------------------------------------------------------------
 
 async function scrapeAndExport(userDataDir, outputDir, opts = {}) {
   const { headless = false } = opts;
   const { context, cleanup } = await launchContext(userDataDir, { headless });
-
   let ships;
-  try {
-    ships = await scrapeAllShips(context);
-  } finally { await cleanup(); }
-
-  const withMfr = ships.filter((s) => s.manufacturer).length;
-  console.log(`  Total: ${ships.length} ships, ${withMfr} with manufacturer`);
-
+  try { ships = await scrapeAllShips(context); } finally { await cleanup(); }
   exportJSON(ships, path.join(outputDir, "ships.json"));
   exportCSV(ships, path.join(outputDir, "ships.csv"));
   return ships;
 }
 
-module.exports = {
-  SHIPS_URL,
-  getManufacturers,
-  extractShipCards,
-  getTotalShipPages,
-  scrapeAllShips,
-  exportJSON,
-  exportCSV,
-  scrapeAndExport,
-};
+module.exports = { scrapeAllShips, exportJSON, exportCSV, scrapeAndExport };

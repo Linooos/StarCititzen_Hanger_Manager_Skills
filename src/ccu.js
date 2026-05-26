@@ -38,8 +38,18 @@ function matchShip(name, catalog) {
   let m = catalog.find(s => s.name === name); if (m) return m;
   const n = normalize(name); m = catalog.find(s => normalize(s.name) === n); if (m) return m;
   const words = n.split(/\s+/).filter(w => w.length > 1);
-  const cs = catalog.filter(s => { const sn = normalize(s.name); return words.filter(w => sn.includes(w)).length >= Math.min(2,words.length); });
-  return cs[0] || null;
+  if (words.length === 0) return null;
+  // Require all words to match, sorted by best match
+  const cs = catalog.map(s => ({ ship: s, matches: words.filter(w => normalize(s.name).includes(w)).length }))
+    .filter(x => x.matches >= words.length)
+    .sort((a,b) => b.matches - a.matches);
+  if (cs.length >= 1) return cs[0].ship;
+  // Fallback: require majority word match, pick best
+  const minMatch = Math.max(1, Math.ceil(words.length * 0.6));
+  const cs2 = catalog.map(s => ({ ship: s, matches: words.filter(w => normalize(s.name).includes(w)).length }))
+    .filter(x => x.matches >= minMatch)
+    .sort((a,b) => b.matches - a.matches);
+  return cs2[0]?.ship || null;
 }
 function loadHangar(root) { return JSON.parse(fs.readFileSync(path.join(root,"output","hangar_items.json"),"utf-8")); }
 function loadCatalog(root) { return JSON.parse(fs.readFileSync(path.join(root,"output","ships.json"),"utf-8")); }
@@ -189,12 +199,14 @@ function findBestChain(opts={}) {
           if(si<0)continue;let s=ch.slice(si);let cs2=s[0].fromValue,ce=s[s.length-1].toValue;
           if(cs2>=tp||ce<=cp)continue;if(ce>tp){let ti=s.findIndex(x=>x.toValue>tp);if(ti<0)ti=s.length;s=s.slice(0,ti);if(s.length===0)continue;ce=s[s.length-1].toValue;if(ce<=cp)continue;}
           if(!best||ce>bestEnd){best=ci;bestSuffix=s;bestStart=cs2;bestEnd=ce;}}
-        if(!best){steps.push({from:cs,to:target.name,fromPrice:cp,toPrice:tp,cost:tp-cp,owned:false,ccuid:"",isWarbond:false,gap:true});cp=tp;break;}
+        if(!best){steps.push({from:cs,to:target.name,fromPrice:cp,toPrice:tp,cost:tp-cp,owned:false,ccuid:"",isWarbond:false,gap:true});cp=tp;cs=target.name;break;}
         used.add(best);if(bestStart>cp)steps.push({from:cs,to:bestSuffix[0].fromShip,fromPrice:cp,toPrice:bestStart,cost:bestStart-cp,owned:false,ccuid:"",isWarbond:false,gap:true});
         bestSuffix.forEach(s=>steps.push({from:s.fromShip,to:s.toShip,fromPrice:s.fromValue,toPrice:s.toValue,cost:s.actualCost,owned:true,ccuid:s.id,isWarbond:s.isWarbond,gap:false}));
         cp=bestEnd;cs=bestSuffix[bestSuffix.length-1].toShip;}
+      if(cp>=tp&&cs!==target.name) return {steps,totalCCU:1e9};
       const tccu=steps.reduce((s,e)=>s+e.cost,0);return {steps,totalCCU:tccu};}
     const result=search(seed.storePrice,seed.actualShip,new Set(),[], 5);
+    if(result.totalCCU>1e8) return {steps:result.steps,totalCCU:1e9,ownedCost:0,gapCost:0,totalMelt:1e9,finalValue:tp,savings:0,efficiency:"0",hasGaps:false};
     const steps=result.steps;
     const tccu=steps.reduce((s,e)=>s+e.cost,0),oc=steps.filter(e=>e.owned).reduce((s,e)=>s+e.cost,0),gc=steps.filter(e=>e.gap).reduce((s,e)=>s+e.cost,0);
     const tm=seed.meltValue+tccu,fv=steps.length>0?steps[steps.length-1].toPrice:tp,sv=fv-tm,ef=tm>0?(fv/tm).toFixed(2):"∞",hg=steps.some(e=>e.gap);
@@ -223,7 +235,9 @@ function formatChainTable(chain){
   return l.join("\n");
 }
 function formatResults(result){
-  if(result.error) return `Error: ${result.error}`;const l=[];
+  if(result.error) return `Error: ${result.error}`;
+  if(result.chain.totalMelt>1e8) return `## No valid path to **${result.target}**\n\nYour available CCUs cannot reach this ship without illegal same-price side-grades.`;
+  const l=[];
   l.push(`## CCU Chain: ${result.seed.actualShip} → **${result.target}** ($${result.targetPrice})`);
   l.push(`_${result.analysisInfo.upgradeCount} upgrades, ${result.analysisInfo.chainCount} chains, ${result.analysisInfo.isolatedCount} isolated_`,"");
   l.push(`### Best — $${result.chain.totalMelt} (${result.chain.efficiency}x)`);
