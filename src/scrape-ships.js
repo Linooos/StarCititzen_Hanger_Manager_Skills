@@ -1,64 +1,27 @@
-/**
- * RSI Ship Catalog Scraper CLI / 星际公民船只目录爬取
- *
- * 双数据源：Ship Matrix (URLs) + Pledge Store (Prices)
- * Usage: node src/scrape-ships.js [--headless] [--force]
- */
-const path = require("path");
-const fs = require("fs");
+/** Ship Catalog CLI */
+const path = require("path"), fs = require("fs");
 const { launchContext, checkSession } = require("./hangar");
 const { scrapeAllShips, exportJSON, exportCSV } = require("./ships");
 
-const PROJECT_ROOT = path.resolve(__dirname, "..");
-const OUTPUT_DIR = path.join(PROJECT_ROOT, "output");
-const HEADLESS = process.argv.includes("--headless");
+const ROOT = path.resolve(__dirname, ".."), OUT = path.join(ROOT, "output");
 const FORCE = process.argv.includes("--force");
+const HEADLESS = process.argv.includes("--headless");
 
 async function main() {
-  const userDataDir = path.join(PROJECT_ROOT, "user_data");
-  const outFile = path.join(OUTPUT_DIR, "ships.json");
-
-  // 数据已存在则跳过 / Skip if data exists
-  if (!FORCE && fs.existsSync(outFile)) {
-    const ships = JSON.parse(fs.readFileSync(outFile, "utf-8"));
-    const priced = ships.filter(s => s.price > 0).length;
-    console.log("=".repeat(60));
-    console.log("  Ship catalog already exists — skipping scrape");
-    console.log(`  ${ships.length} ships, ${priced} with prices`);
-    console.log("  Use --force to re-scrape");
-    console.log("=".repeat(60));
+  const dir = path.join(ROOT, "user_data");
+  const out = path.join(OUT, "ships.json");
+  if (!FORCE && fs.existsSync(out)) {
+    const ships = JSON.parse(fs.readFileSync(out, "utf-8"));
+    console.log(`Ships exist: ${ships.length}, ${ships.filter(s=>s.price).length} priced. --force to re-scrape`);
     return;
   }
-  console.log("=".repeat(60));
-  console.log("  RSI Ship Catalog Scraper (Matrix + Store)");
-  console.log("=".repeat(60));
-  console.log(`  Mode: ${HEADLESS ? "headless" : "headed"}`);
-  console.log();
-
-  const { context, cleanup } = await launchContext(userDataDir, { headless: HEADLESS });
-
-  // 检查会话 / Check session
-  const sessionOk = await checkSession(context);
-  if (!sessionOk) {
-    console.log("\n⚠️  Session expired. Please re-login: npm run login\n");
-    await cleanup();
-    process.exit(1);
-  }
-
+  console.log("=".repeat(50) + "\n  Ship Catalog Scraper\n" + "=".repeat(50));
+  const { context, cleanup } = await launchContext(dir, { headless: HEADLESS });
+  if (!(await checkSession(context))) { console.log("Session expired — npm run login"); await cleanup(); process.exit(1); }
   let ships;
   try { ships = await scrapeAllShips(context); } finally { await cleanup(); }
-
-  const jsonPath = path.join(OUTPUT_DIR, "ships.json");
-  exportJSON(ships, jsonPath);
-  console.log(`\n[OK] JSON: ${jsonPath} (${ships.length} ships)`);
-
-  const csvPath = path.join(OUTPUT_DIR, "ships.csv");
-  exportCSV(ships, csvPath);
-  console.log(`[OK] CSV : ${csvPath}`);
-
-  const priced = ships.filter(s => s.price > 0).length;
-  console.log(`\n  Priced: ${priced}/${ships.length}`);
-  console.log("Done.");
+  exportJSON(ships, path.join(OUT, "ships.json"));
+  exportCSV(ships, path.join(OUT, "ships.csv"));
+  console.log(`\nDone: ${ships.length} ships, ${ships.filter(s=>s.price).length} priced`);
 }
-
-main().catch(err => { console.error("Fatal:", err); process.exit(1); });
+main().catch(e => { console.error(e); process.exit(1); });

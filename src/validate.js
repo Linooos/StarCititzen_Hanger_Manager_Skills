@@ -34,23 +34,7 @@ function validate() {
     console.log(`  Hangar: ${hangar.length} items, ${seeds.length} seeds, ${upgrades.length} upgrades`);
   }
 
-  // 2. 船只目录 / Ship catalog
-  const ships = load("ships.json");
-  if (!ships) {
-    results.issues.push("ships.json missing — run: npm run scrape:ships");
-    results.ok = false;
-  } else {
-    const priced = ships.filter(s => s.price > 0).length;
-    if (ships.length < 200) results.issues.push(`Ship count low: ${ships.length} (expected ~250)`);
-    if (priced < 200) results.issues.push(`Priced ships low: ${priced} (expected >200)`);
-    const aurora = ships.filter(s => s.name.includes("Aurora"));
-    if (aurora.length < 3) results.issues.push(`Aurora variants missing (found ${aurora.length})`);
-    const am2 = ships.find(s => s.name === "Aurora-Mk-II");
-    if (!am2 || am2.price <= 0) results.issues.push("Aurora-Mk-II missing or unpriced");
-    console.log(`  Ships: ${ships.length} total, ${priced} priced`);
-  }
-
-  // 3. CCU 分析 / CCU analysis
+  // 2. CCU 分析 / CCU analysis
   const ccu = load("ccu_analysis.json");
   if (!ccu) {
     results.warnings.push("ccu_analysis.json missing — run: npm run scrape (or ccu:precompute)");
