@@ -57,6 +57,9 @@ async function main() {
   });
   console.log(`  Total: ${stats.totalItems} items, $${stats.totalValue.toFixed(2)}`);
 
+  console.log("\n--- CCU Precompute ---");
+  try { require("./ccu").precompute(PROJECT_ROOT); } catch(e) { console.log(`  [CCU] ${e.message}`); }
+
   console.log("\nDone.");
 }
 

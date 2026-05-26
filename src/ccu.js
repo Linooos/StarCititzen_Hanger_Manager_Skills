@@ -1,643 +1,228 @@
 /**
- * CCU Chain Calculator
- *
- * Given a target ship and the player's hangar data, finds the cheapest
- * upgrade path from owned standalone ships using owned CCUs.
- *
+ * CCU Chain Calculator v5 — Greedy Local-Chain Algorithm (11 Steps)
  * @module ccu
  */
+const fs = require("fs"); const path = require("path");
 
-const fs = require("fs");
-const path = require("path");
+let VALUE_SPAN_WEIGHT = 1;
+let SAVINGS_WEIGHT = 1;
+function setWeights(v, s) { if (v != null) VALUE_SPAN_WEIGHT = v; if (s != null) SAVINGS_WEIGHT = s; }
 
-// ---------------------------------------------------------------------------
-// Ship name normalization & matching
-// ---------------------------------------------------------------------------
-
-/** Normalize a ship name for fuzzy comparison */
-function normalize(name) {
-  return name
-    .toLowerCase()
-    .replace(/[-]/g, " ")
-    .replace(/\s+/g, " ")
-    .replace(/^(upgrade\s*-\s*)/i, "")
-    .replace(/\s*(standard|warbond)\s*edition\s*$/i, "")
-    .replace(/[^a-z0-9\s]/g, "")
-    .trim();
-}
-
-/** Known ship name aliases: upgrade-name → catalog-name */
 const ALIASES = {
-  "hull a": "Hull-A",
-  "hull b": "Hull-B",
-  "hull c": "Hull-C",
-  "hull d": "Hull-D",
-  "hull e": "Hull-E",
-  "cutlass steel": "Cutlass-Steel",
-  "cutlass red": "Cutlass-Red",
-  "cutlass blue": "Cutlass-Blue",
-  "cutlass black": "Cutlass-Black",
-  "ironclad assault": "Ironclad-Assault",
-  "m2 hercules": "M2-Hercules",
-  "c2 hercules": "C2-Hercules",
-  "a2 hercules": "A2-Hercules",
-  "avenger warlock": "Avenger-Warlock",
-  "avenger stalker": "Avenger-Stalker",
-  "avenger titan renegade": "Avenger-Titan-Renegade",
-  "storm aa": "Storm-AA",
-  "c1 spirit": "C1-Spirit",
-  "a1 spirit": "A1-Spirit",
-  "e1 spirit": "E1-Spirit",
-  "terrapin medic": "Terrapin-Medic",
-  "vanguard sentinel": "Vanguard-Sentinel",
-  "vanguard harbinger": "Vanguard-Harbinger",
-  "vanguard hoplite": "Vanguard-Hoplite",
-  "guardian qi": "Guardian-QI",
-  "guardian mx": "Guardian-MX",
-  "f7c r hornet tracker mk ii": "F7C-R-Hornet-Tracker-Mk-II",
-  "f7c m super hornet mk ii": "F7C-M-Super-Hornet-Mk-II",
-  "zeus mk ii mr": "Zeus-Mk-II-MR",
-  "zeus mk ii es": "Zeus-Mk-II-ES",
-  "zeus mk ii cl": "Zeus-Mk-II-CL",
-  "apollo medivac": "Apollo-Medivac",
-  "apollo triage": "Apollo-Triage",
-  "starfarer gemini": "Starfarer-Gemini",
-  "constellation taurus": "Constellation-Taurus",
-  "constellation andromeda": "Constellation-Andromeda",
-  "constellation aquila": "Constellation-Aquila",
-  "starlancer max": "Starlancer-MAX",
-  "starlancer tac": "Starlancer-TAC",
-  "fury mx": "Fury-MX",
+  "hull a":"Hull-A","hull b":"Hull-B","hull c":"Hull-C","hull d":"Hull-D","hull e":"Hull-E",
+  "cutlass steel":"Cutlass-Steel","cutlass red":"Cutlass-Red","cutlass blue":"Cutlass-Blue","cutlass black":"Cutlass-Black",
+  "ironclad assault":"Ironclad-Assault","m2 hercules":"M2-Hercules","c2 hercules":"C2-Hercules","a2 hercules":"A2-Hercules",
+  "avenger warlock":"Avenger-Warlock","avenger stalker":"Avenger-Stalker","avenger titan renegade":"Avenger-Titan-Renegade",
+  "storm aa":"Storm-AA","c1 spirit":"C1-Spirit","a1 spirit":"A1-Spirit",
+  "terrapin medic":"Terrapin-Medic","vanguard sentinel":"Vanguard-Sentinel","vanguard harbinger":"Vanguard-Harbinger",
+  "vanguard hoplite":"Vanguard-Hoplite","guardian qi":"Guardian-QI","guardian mx":"Guardian-MX",
+  "f7c r hornet tracker mk ii":"F7C-R-Hornet-Tracker-Mk-II","f7c m super hornet mk ii":"F7C-M-Super-Hornet-Mk-II",
+  "zeus mk ii mr":"Zeus-Mk-II-MR","zeus mk ii es":"Zeus-Mk-II-ES",
+  "apollo medivac":"Apollo-Medivac","apollo triage":"Apollo-Triage","starfarer gemini":"Starfarer-Gemini",
+  "constellation taurus":"Constellation-Taurus","constellation andromeda":"Constellation-Andromeda",
+  "constellation aquila":"Constellation-Aquila","starlancer max":"Starlancer-MAX","starlancer tac":"Starlancer-TAC",
+  "fury mx":"Fury-MX","freelancer dur":"Freelancer-DUR","freelancer max":"Freelancer-MAX","freelancer mis":"Freelancer-MIS",
 };
-
-/**
- * Find the best catalog match for a ship name.
- * Priority: alias > exact > normalized > partial word match
- */
+function normalize(n) { return n.toLowerCase().replace(/[-]/g," ").replace(/\s+/g," ").replace(/^(upgrade\s*-\s*)/i,"").replace(/\s*(standard|warbond)\s*edition\s*$/i,"").trim(); }
 function matchShip(name, catalog) {
   if (!name) return null;
-
-  // Try alias lookup
   const key = name.toLowerCase().trim();
-  if (ALIASES[key]) {
-    const aliasName = ALIASES[key];
-    return catalog.find((s) => s.name === aliasName) || null;
-  }
-
-  // Try exact match
-  let match = catalog.find((s) => s.name === name);
-  if (match) return match;
-
-  // Try normalized match
-  const norm = normalize(name);
-  match = catalog.find((s) => normalize(s.name) === norm);
-  if (match) return match;
-
-  // Try partial: catalog name contains the upgrade ship name words
-  const words = norm.split(/\s+/).filter((w) => w.length > 1);
-  const candidates = catalog.filter((s) => {
-    const sNorm = normalize(s.name);
-    const matchCount = words.filter((w) => sNorm.includes(w)).length;
-    return matchCount >= Math.min(2, words.length);
-  });
-
-  if (candidates.length === 1) return candidates[0];
-  if (candidates.length > 1) {
-    // Pick the one with the most word matches
-    candidates.sort((a, b) => {
-      const aN = normalize(a.name), bN = normalize(b.name);
-      const aC = words.filter((w) => aN.includes(w)).length;
-      const bC = words.filter((w) => bN.includes(w)).length;
-      return bC - aC;
-    });
-    return candidates[0];
-  }
-
-  return null;
+  if (ALIASES[key]) { const m = catalog.find(s => s.name === ALIASES[key]); if (m) return m; }
+  let m = catalog.find(s => s.name === name); if (m) return m;
+  const n = normalize(name); m = catalog.find(s => normalize(s.name) === n); if (m) return m;
+  const words = n.split(/\s+/).filter(w => w.length > 1);
+  const cs = catalog.filter(s => { const sn = normalize(s.name); return words.filter(w => sn.includes(w)).length >= Math.min(2,words.length); });
+  return cs[0] || null;
 }
+function loadHangar(root) { return JSON.parse(fs.readFileSync(path.join(root,"output","hangar_items.json"),"utf-8")); }
+function loadCatalog(root) { return JSON.parse(fs.readFileSync(path.join(root,"output","ships.json"),"utf-8")); }
+function loadAnalysis(root) { const p = path.join(root,"output","ccu_analysis.json"); return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p,"utf-8")) : null; }
 
-// ---------------------------------------------------------------------------
-// Data loading
-// ---------------------------------------------------------------------------
-
-function loadHangarItems(projectRoot) {
-  const p = path.join(projectRoot, "output", "hangar_items.json");
-  return JSON.parse(fs.readFileSync(p, "utf-8"));
-}
-
-function loadShipCatalog(projectRoot) {
-  const p = path.join(projectRoot, "output", "ships.json");
-  return JSON.parse(fs.readFileSync(p, "utf-8"));
-}
-
-// ---------------------------------------------------------------------------
-// Price map: ship name → store price
-// ---------------------------------------------------------------------------
-
-function buildPriceMap(shipCatalog, upgrades) {
-  const map = {};
-  shipCatalog.forEach((s) => {
-    map[s.name] = s.price;
-  });
-
-  // Also try matching upgrade ship names to catalog
-  const allNames = new Set();
-  upgrades.forEach((u) => {
-    if (u.fromShip) allNames.add(u.fromShip);
-    if (u.toShip) allNames.add(u.toShip);
-  });
-
-  allNames.forEach((name) => {
-    if (!map[name]) {
-      const match = matchShip(name, shipCatalog);
-      if (match) map[name] = match.price;
-    }
-  });
-
-  return map;
-}
-
-// ---------------------------------------------------------------------------
-// Directed graph from upgrades
-// ---------------------------------------------------------------------------
-
-function buildGraph(upgrades, priceMap, excludeIds) {
-  const exclude = new Set(excludeIds || []);
-  const graph = {}; // { fromShip: [{ to, cost, id, isWarbond, fromPrice, toPrice }] }
-
-  upgrades.forEach((u) => {
-    if (exclude.has(u.id)) return;
+// STEP 1
+function analyzeUpgrades(root) {
+  const hangar = loadHangar(root); const catalog = loadCatalog(root);
+  const pm = {}; catalog.forEach(s => { pm[s.name] = s.price; });
+  const result = [];
+  hangar.filter(i => i.category === "Upgrades").forEach(u => {
     if (!u.fromShip || !u.toShip) return;
-
-    const fromPrice = priceMap[u.fromShip] || 0;
-    const toPrice = priceMap[u.toShip] || 0;
-
-    if (!graph[u.fromShip]) graph[u.fromShip] = [];
-    graph[u.fromShip].push({
-      to: u.toShip,
-      cost: u.meltValue,
-      id: u.id,
-      isWarbond: u.isWarbond,
-      fromPrice,
-      toPrice,
-    });
+    const fm = matchShip(u.fromShip, catalog), tm = matchShip(u.toShip, catalog);
+    const fv = fm ? fm.price : (pm[u.fromShip]||0), tv = tm ? tm.price : (pm[u.toShip]||0), pd = tv - fv;
+    if (pd <= 0) return;
+    const ac = u.meltValue, sv = pd - ac, sp = pd > 0 ? sv/pd : 0;
+    result.push({ id:u.id, name:u.name, fromShip:fm?fm.name:u.fromShip, toShip:tm?tm.name:u.toShip, fromValue:fv, toValue:tv, priceDiff:pd, actualCost:ac, savings:sv, savingsPercent:sp, isWarbond:u.isWarbond });
   });
-
-  return graph;
+  result.sort((a,b) => b.savingsPercent - a.savingsPercent);
+  return result;
 }
 
-// ---------------------------------------------------------------------------
-// Path finding — DFS from seed to target
-// ---------------------------------------------------------------------------
-
-function findAllPaths(graph, start, target, maxDepth = 30) {
-  const paths = [];
-
-  function dfs(current, visited, path, totalCost) {
-    if (current === target) {
-      paths.push({ steps: [...path], totalCost });
-      return;
-    }
-    if (path.length >= maxDepth) return;
-
-    const edges = graph[current];
-    if (!edges) return;
-
-    for (const edge of edges) {
-      if (visited.has(edge.to)) continue; // no cycles
-      visited.add(edge.to);
-      path.push(edge);
-      dfs(edge.to, visited, path, totalCost + edge.cost);
-      path.pop();
-      visited.delete(edge.to);
-    }
-  }
-
-  const visited = new Set([start]);
-  dfs(start, visited, [], 0);
-
-  return paths;
-}
-
-// ---------------------------------------------------------------------------
-// Chain analysis
-// ---------------------------------------------------------------------------
-
-/**
- * Find the cheapest CCU chains from hangar seed ships to a target ship.
- *
- * @param {object} opts
- * @param {string} opts.targetShip - target ship name (must match catalog)
- * @param {string} opts.projectRoot - project root path
- * @param {string[]} [opts.seedShipIds] - limit to specific seed ship IDs (hangar item IDs)
- * @param {string[]} [opts.excludeIds] - CCU IDs to exclude
- * @returns {object} { target, targetPrice, chains: [{seed, steps, totalMelt, finalValue, savings, efficiency}] }
- */
-function findCheapestChain(opts = {}) {
-  const {
-    targetShip,
-    projectRoot = ".",
-    seedShipIds = null,
-    excludeIds = [],
-  } = opts;
-
-  const hangar = loadHangarItems(projectRoot);
-  const catalog = loadShipCatalog(projectRoot);
-  const upgrades = hangar.filter((i) => i.category === "Upgrades");
-  const priceMap = buildPriceMap(catalog, upgrades);
-
-  // Find target in catalog
-  const targetMatch = matchShip(targetShip, catalog);
-  if (!targetMatch) {
-    return { error: `Target ship "${targetShip}" not found in catalog` };
-  }
-  const targetPrice = targetMatch.price;
-
-  // Get seed ships
-  let seeds = hangar.filter((i) => i.category === "Standalone Ships");
-  if (seedShipIds) {
-    seeds = seeds.filter((s) => seedShipIds.includes(s.id));
-  }
-
-  // Build graph
-  const graph = buildGraph(upgrades, priceMap, excludeIds);
-
-  // Get the actual ship name (after upgrades) for each seed
-  const seedInfo = seeds
-    .map((s) => {
-      let actualShip = s.actualShip;
-      // Fallback: parse ship name from contains text or item name
-      if (!actualShip) {
-        const containsMatch = (s.contains || "").match(/Contains:\s*(.+?)\s+and\s+\d+\s+items?/);
-        if (containsMatch) actualShip = containsMatch[1];
-        if (!actualShip) {
-          // Try extracting ship name from the item name
-          const nameParts = s.name.split(/[\n-]/);
-          actualShip = nameParts[nameParts.length - 1].trim();
-        }
-      }
-      return {
-        id: s.id,
-        label: s.name.trim().split("\n")[0],
-        actualShip,
-        meltValue: s.meltValue,
-        insurance: s.insurance || [],
-      };
-    })
-    .filter((s) => s.actualShip && s.actualShip.length > 0);
-
-  // Find all chains from each seed to target
+// STEP 2
+function buildLocalChains(upgrades) {
+  const deduped = []; const seen = new Set();
+  upgrades.forEach(u => { const k = u.fromShip+"|"+u.toShip+"|"+u.actualCost; if (!seen.has(k)) { seen.add(k); deduped.push(u); } });
+  const byFrom = {}, byTo = {};
+  deduped.forEach((u,i) => {
+    if (!byFrom[u.fromShip]) byFrom[u.fromShip] = []; byFrom[u.fromShip].push(i);
+    if (!byTo[u.toShip]) byTo[u.toShip] = []; byTo[u.toShip].push(i);
+  });
   const allChains = [];
-  seedInfo.forEach((seed) => {
-    // The seed's starting ship is what it actually represents after previous upgrades
-    const startShip = seed.actualShip;
-    if (!startShip) return;
-
-    const paths = findAllPaths(graph, startShip, targetShip);
-    paths.forEach((p) => {
-      // Compute final value: the last CCU's toPrice
-      const lastStep = p.steps[p.steps.length - 1];
-      const finalValue = lastStep ? lastStep.toPrice : (priceMap[startShip] || 0);
-      const totalMelt = seed.meltValue + p.totalCost;
-      const savings = finalValue - totalMelt;
-      const efficiency = totalMelt > 0 ? (finalValue / totalMelt).toFixed(2) : "∞";
-
-      allChains.push({
-        seed,
-        steps: p.steps,
-        totalMelt,
-        finalValue,
-        savings,
-        efficiency,
-      });
-    });
+  for (let si = 0; si < deduped.length; si++) _extendFromSeed(si, deduped, byFrom, byTo, allChains);
+  const seenSigs = new Set(); const scored = [];
+  allChains.forEach(indices => {
+    const steps = indices.map(i => deduped[i]);
+    const sig = steps.map(s => s.id).sort().join(",");
+    if (seenSigs.has(sig)) return; seenSigs.add(sig);
+    const sv = steps[0].fromValue, ev = steps[steps.length-1].toValue, vs = ev - sv;
+    const ts = steps.reduce((s,u) => s+u.savings, 0);
+    scored.push({ steps, stepIds:steps.map(s=>s.id), valueSpan:vs, totalSavings:ts, score:(vs*VALUE_SPAN_WEIGHT)+(ts*SAVINGS_WEIGHT) });
   });
+  scored.sort((a,b) => b.score - a.score);
+  return scored;
+}
+function _extendFromSeed(si, upgrades, byFrom, byTo, results) {
+  const fwd = _extendForward([si], upgrades, byFrom);
+  fwd.forEach(c => { const bwd = _extendBackward(c, upgrades, byTo); bwd.forEach(x => { if (x.length>=1) results.push(x); }); });
+}
+function _extendForward(chain, upgrades, byFrom) {
+  const last = upgrades[chain[chain.length-1]];
+  const cands = (byFrom[last.toShip]||[]).filter(i => !chain.includes(i));
+  if (cands.length===0) return [chain];
+  if (cands.length===1) return _extendForward([...chain, cands[0]], upgrades, byFrom);
+  const r=[]; cands.forEach(ci => { _extendForward([...chain, ci], upgrades, byFrom).forEach(b => r.push(b)); }); return r;
+}
+function _extendBackward(chain, upgrades, byTo) {
+  const first = upgrades[chain[0]];
+  const cands = (byTo[first.fromShip]||[]).filter(i => !chain.includes(i));
+  if (cands.length===0) return [chain];
+  if (cands.length===1) return _extendBackward([cands[0], ...chain], upgrades, byTo);
+  const r=[]; cands.forEach(ci => { _extendBackward([ci, ...chain], upgrades, byTo).forEach(b => r.push(b)); }); return r;
+}
 
-  // Sort by total melt (cheapest first)
-  allChains.sort((a, b) => a.totalMelt - b.totalMelt);
-
-  return {
-    target: targetMatch.name,
-    targetPrice,
-    graphNodeCount: Object.keys(graph).length,
-    graphEdgeCount: upgrades.length - excludeIds.length,
-    chains: allChains.slice(0, 10),
-    totalFound: allChains.length,
-    _projectRoot: projectRoot,
+// STEP 3-4
+function findIsolated(upgrades, chains) { const ic = new Set(); chains.forEach(c => c.steps.forEach(s => ic.add(s.id))); return upgrades.filter(u => !ic.has(u.id)); }
+function precompute(root) {
+  console.log("  [CCU] Analyzing upgrades...");
+  const upgrades = analyzeUpgrades(root); console.log(`  [CCU] ${upgrades.length} valid upgrades`);
+  console.log("  [CCU] Building local chains...");
+  const chains = buildLocalChains(upgrades); console.log(`  [CCU] ${chains.length} local chains`);
+  const dedupedForIso = []; const isoSeen = new Set();
+  upgrades.forEach(u => { const k = u.fromShip+"|"+u.toShip+"|"+u.actualCost; if (!isoSeen.has(k)) { isoSeen.add(k); dedupedForIso.push(u); } });
+  const isolated = findIsolated(dedupedForIso, chains);
+  const upgMap = {}; upgrades.forEach(u => { upgMap[u.id] = u; });
+  const data = {
+    weights:{valueSpanWeight:VALUE_SPAN_WEIGHT,savingsWeight:SAVINGS_WEIGHT},
+    upgradeCount:dedupedForIso.length+isolated.length, chainCount:chains.length, isolatedCount:isolated.length,
+    localChains:chains.map(c=>({stepIds:c.stepIds,valueSpan:c.valueSpan,totalSavings:c.totalSavings,score:c.score,steps:c.steps.map(s=>({id:s.id,fromShip:s.fromShip,toShip:s.toShip,fromValue:s.fromValue,toValue:s.toValue,actualCost:s.actualCost,savings:s.savings,savingsPercent:s.savingsPercent,isWarbond:s.isWarbond})),valueRange:{min:c.steps[0].fromValue,max:c.steps[c.steps.length-1].toValue}})),
+    isolated:isolated.map(u=>({id:u.id,fromShip:u.fromShip,toShip:u.toShip,fromValue:u.fromValue,toValue:u.toValue,actualCost:u.actualCost,savings:u.savings,savingsPercent:u.savingsPercent})),
+    upgrades:upgrades.map(u=>({id:u.id,fromShip:u.fromShip,toShip:u.toShip,fromValue:u.fromValue,toValue:u.toValue,actualCost:u.actualCost,savings:u.savings,savingsPercent:u.savingsPercent})),
+    _upgMap:upgMap,
   };
+  fs.writeFileSync(path.join(root,"output","ccu_analysis.json"), JSON.stringify(data,null,2));
+  console.log(`  [CCU] Saved: output/ccu_analysis.json`);
+  return data;
 }
 
-// ---------------------------------------------------------------------------
-// Best Path with Gap Filling (Dijkstra on complete price graph)
-// ---------------------------------------------------------------------------
+// STEPS 5-10
+function findBestChain(opts={}) {
+  const {seedShip,targetShip,projectRoot:root=".",excludeIds=[]}=opts;
+  const exSet=new Set(excludeIds);
+  const catalog=loadCatalog(root),analysis=loadAnalysis(root);
+  if(!analysis) return {error:"No analysis. Run precompute() first."};
+  const target=matchShip(targetShip,catalog);
+  if(!target) return {error:`Target "${targetShip}" not found`};
+  const tp=target.price;
+  const hangar=loadHangar(root);
+  const seeds=hangar.filter(i=>i.category==="Standalone Ships"||i.category==="Game Packages");
+  let seed=null;
+  if(seedShip){const s=seeds.find(x=>x.actualShip===seedShip||x.name.includes(seedShip)||x.id===seedShip);
+    if(s){let a=s.actualShip;if(!a){const cm=(s.contains||"").match(/Contains:\s*(.+?)\s+and\s+\d+\s+items?/);if(cm)a=cm[1];}if(!a)a=s.name.split(/[\n-]/).pop().trim();
+      const sp=_shipPrice(a,catalog);seed={id:s.id,label:s.name.trim().split("\n")[0],actualShip:a,meltValue:s.meltValue,storePrice:sp,insurance:s.insurance||[]};}}
+  if(!seed) return {error:`Seed "${seedShip}" not found`};
+  if(seed.storePrice>=tp) return {error:"Seed price >= target price"};
 
-/**
- * Find the cheapest path from seed ships to target, including gaps
- * where no CCU is owned (assumes buying at full price difference).
- *
- * Uses Dijkstra on the complete price graph: every ship can upgrade to
- * every more-expensive ship. Owned CCUs provide discounted edges.
- */
-function findBestPath(opts = {}) {
-  const {
-    targetShip, projectRoot = ".", seedShipIds = null, excludeIds = [],
-  } = opts;
-
-  const hangar = loadHangarItems(projectRoot);
-  const catalog = loadShipCatalog(projectRoot);
-  const upgrades = hangar.filter((i) => i.category === "Upgrades");
-  const priceMap = buildPriceMap(catalog, upgrades);
-
-  // Find target in catalog
-  const targetMatch = matchShip(targetShip, catalog);
-  if (!targetMatch) return { error: `Target ship "${targetShip}" not found in catalog` };
-  const targetPrice = targetMatch.price;
-
-  // Get seed ships
-  let seeds = hangar.filter((i) => i.category === "Standalone Ships");
-  if (seedShipIds) seeds = seeds.filter((s) => seedShipIds.includes(s.id));
-  seeds = seeds
-    .map((s) => {
-      let actualShip = s.actualShip;
-      if (!actualShip) {
-        const cm = (s.contains || "").match(/Contains:\s*(.+?)\s+and\s+\d+\s+items?/);
-        if (cm) actualShip = cm[1];
-        if (!actualShip) actualShip = s.name.split(/[\n-]/).pop().trim();
+  function assemble(rankedChains){
+    // Limited-depth search: try all candidates at each decision point, depth-limited
+    function search(curPrice,curShip,usedSet,pathSoFar,depth){
+      if(curPrice>=tp||depth<=0) return _greedyFinish(curPrice,curShip,usedSet,pathSoFar);
+      // Collect candidates at this position
+      const cands=[];
+      for(let ci=0;ci<rankedChains.length;ci++){if(usedSet.has(ci))continue;
+        const ch=rankedChains[ci].steps;let si=-1,siVal=Infinity;
+        for(let i=0;i<ch.length;i++){if(ch[i].fromValue>curPrice&&ch[i].fromValue<tp&&ch[i].fromValue<siVal){si=i;siVal=ch[i].fromValue;}}
+        if(si<0)continue;
+        // Generate key partial suffixes + full suffix
+        const full=ch.slice(si);let cs2=full[0].fromValue,ce=full[full.length-1].toValue;
+        if(ce>tp){let ti=full.findIndex(x=>x.toValue>tp);if(ti<0)ti=full.length;full.length=ti;if(full.length===0)continue;ce=full[full.length-1].toValue;}
+        if(cs2<tp&&ce>curPrice){cands.push({ci,suffix:[...full],cStart:cs2,cEnd:ce});}
+        // Also add first few partials (1 step, 2 steps)
+        for(let cut=1;cut<=Math.min(2,full.length);cut++){
+          let s=full.slice(0,cut);let ce2=s[s.length-1].toValue;
+          if(ce2<=curPrice||ce2>tp)continue;
+          cands.push({ci,suffix:s,cStart:cs2,cEnd:ce2});}
       }
-      return { id: s.id, label: s.name.trim().split("\n")[0], actualShip, meltValue: s.meltValue, insurance: s.insurance || [] };
-    })
-    .filter((s) => s.actualShip && s.actualShip.length > 0);
-
-  // Build owned CCU index: { "from→to": { cost, id, isWarbond } }
-  const exclude = new Set(excludeIds || []);
-  const ownedEdges = {};
-  upgrades.forEach((u) => {
-    if (exclude.has(u.id)) return;
-    if (!u.fromShip || !u.toShip) return;
-    const key = u.fromShip + "→" + u.toShip;
-    // Keep the cheapest CCU for each pair
-    if (!ownedEdges[key] || u.meltValue < ownedEdges[key].cost) {
-      ownedEdges[key] = { cost: u.meltValue, id: u.id, isWarbond: u.isWarbond };
-    }
-  });
-
-  // Build sorted ship list by price (for neighbor generation)
-  const shipList = catalog
-    .filter((s) => s.price > 0)
-    .sort((a, b) => a.price - b.price);
-
-  // For each seed, run Dijkstra
-  const allChains = [];
-
-  seeds.forEach((seed) => {
-    const startShip = seed.actualShip;
-    if (!startShip) return;
-
-    // Can't upgrade to a cheaper ship
-    const seedPrice = priceMap[startShip] || 0;
-    if (seedPrice >= targetPrice) return;
-
-    // Dijkstra
-    const dist = {};   // shipName → minCost from start
-    const prev = {};   // shipName → {fromShip, edge}
-    const visited = new Set();
-
-    dist[startShip] = 0;
-
-    while (true) {
-      // Find unvisited node with smallest distance
-      let current = null, minDist = Infinity;
-      for (const [ship, d] of Object.entries(dist)) {
-        if (!visited.has(ship) && d < minDist) {
-          minDist = d; current = ship;
-        }
+      // Also add "just gap to end" as a candidate (skip all chains)
+      if(cands.length===0||depth<=0) return _greedyFinish(curPrice,curShip,usedSet,pathSoFar);
+      let best=null,bestCCU=Infinity;
+      for(const cand of cands){
+        const path=[...pathSoFar];
+        if(cand.cStart>curPrice) path.push({from:curShip,to:cand.suffix[0].fromShip,fromPrice:curPrice,toPrice:cand.cStart,cost:cand.cStart-curPrice,owned:false,ccuid:"",isWarbond:false,gap:true});
+        cand.suffix.forEach(s=>path.push({from:s.fromShip,to:s.toShip,fromPrice:s.fromValue,toPrice:s.toValue,cost:s.actualCost,owned:true,ccuid:s.id,isWarbond:s.isWarbond,gap:false}));
+        const used=new Set(usedSet);used.add(cand.ci);
+        const result=search(cand.cEnd,cand.suffix[cand.suffix.length-1].toShip,used,path,depth-1);
+        if(result.totalCCU<bestCCU){best=result;bestCCU=result.totalCCU;}
       }
-      if (!current || current === targetShip) break;
-      visited.add(current);
-
-      const curPrice = priceMap[current] || 0;
-
-      // Generate neighbors: all ships with higher price
-      for (const s of shipList) {
-        if (s.price <= curPrice) continue;
-        const neighbor = s.name;
-        if (visited.has(neighbor)) continue;
-
-        // Determine edge cost
-        const edgeKey = current + "→" + neighbor;
-        const owned = ownedEdges[edgeKey];
-        const edgeCost = owned ? owned.cost : (s.price - curPrice);
-
-        const newDist = (dist[current] || 0) + edgeCost;
-        if (newDist < (dist[neighbor] || Infinity)) {
-          dist[neighbor] = newDist;
-          prev[neighbor] = {
-            from: current, to: neighbor,
-            fromPrice: curPrice, toPrice: s.price,
-            cost: edgeCost,
-            owned: !!owned,
-            ccuid: owned ? owned.id : "",
-            isWarbond: owned ? owned.isWarbond : false,
-          };
-        }
-      }
+      return best;
     }
+    function _greedyFinish(curPrice,curShip,usedSet,pathSoFar){
+      const steps=[...pathSoFar];let cp=curPrice,cs=curShip;const used=new Set(usedSet);
+      while(cp<tp){
+        let best=null,bestSuffix=null,bestStart=0,bestEnd=0;
+        for(let ci=0;ci<rankedChains.length;ci++){if(used.has(ci))continue;
+          const ch=rankedChains[ci].steps;let si=-1,siVal=Infinity;
+          for(let i=0;i<ch.length;i++){if(ch[i].fromValue>cp&&ch[i].fromValue<tp&&ch[i].fromValue<siVal){si=i;siVal=ch[i].fromValue;}}
+          if(si<0)continue;let s=ch.slice(si);let cs2=s[0].fromValue,ce=s[s.length-1].toValue;
+          if(cs2>=tp||ce<=cp)continue;if(ce>tp){let ti=s.findIndex(x=>x.toValue>tp);if(ti<0)ti=s.length;s=s.slice(0,ti);if(s.length===0)continue;ce=s[s.length-1].toValue;if(ce<=cp)continue;}
+          if(!best||ce>bestEnd){best=ci;bestSuffix=s;bestStart=cs2;bestEnd=ce;}}
+        if(!best){steps.push({from:cs,to:target.name,fromPrice:cp,toPrice:tp,cost:tp-cp,owned:false,ccuid:"",isWarbond:false,gap:true});cp=tp;break;}
+        used.add(best);if(bestStart>cp)steps.push({from:cs,to:bestSuffix[0].fromShip,fromPrice:cp,toPrice:bestStart,cost:bestStart-cp,owned:false,ccuid:"",isWarbond:false,gap:true});
+        bestSuffix.forEach(s=>steps.push({from:s.fromShip,to:s.toShip,fromPrice:s.fromValue,toPrice:s.toValue,cost:s.actualCost,owned:true,ccuid:s.id,isWarbond:s.isWarbond,gap:false}));
+        cp=bestEnd;cs=bestSuffix[bestSuffix.length-1].toShip;}
+      const tccu=steps.reduce((s,e)=>s+e.cost,0);return {steps,totalCCU:tccu};}
+    const result=search(seed.storePrice,seed.actualShip,new Set(),[], 5);
+    const steps=result.steps;
+    const tccu=steps.reduce((s,e)=>s+e.cost,0),oc=steps.filter(e=>e.owned).reduce((s,e)=>s+e.cost,0),gc=steps.filter(e=>e.gap).reduce((s,e)=>s+e.cost,0);
+    const tm=seed.meltValue+tccu,fv=steps.length>0?steps[steps.length-1].toPrice:tp,sv=fv-tm,ef=tm>0?(fv/tm).toFixed(2):"∞",hg=steps.some(e=>e.gap);
+    return {steps,totalCCU:tccu,ownedCost:oc,gapCost:gc,totalMelt:tm,finalValue:fv,savings:sv,efficiency:ef,hasGaps:hg};
+  }
+  let activeChains=analysis.localChains;
+  if(exSet.size>0){activeChains=analysis.localChains.filter(c=>!c.stepIds.some(id=>exSet.has(id)));}
+  const best=assemble(activeChains);
+  return {target:target.name,targetPrice:tp,seed,chain:_makeChain(seed,best),alternatives:[],analysisInfo:{upgradeCount:analysis.upgradeCount,chainCount:analysis.chainCount,isolatedCount:analysis.isolatedCount}};
+}
+function _shipPrice(n,c){const m=matchShip(n,c);return m?m.price:0;}
+function _makeChain(seed,a){return{seed,steps:a.steps,totalMelt:a.totalMelt,finalValue:a.finalValue,savings:a.savings,efficiency:a.efficiency,hasGaps:a.hasGaps,ownedCost:a.ownedCost,gapCost:a.gapCost};}
 
-    // Reconstruct path
-    if (!prev[targetShip]) return; // not reachable
-
-    const steps = [];
-    let node = targetShip;
-    while (prev[node]) {
-      steps.unshift(prev[node]);
-      node = prev[node].from;
-    }
-
-    const totalCCUCost = steps.reduce((s, e) => s + e.cost, 0);
-    const totalMelt = seed.meltValue + totalCCUCost;
-    const finalValue = steps.length > 0 ? steps[steps.length - 1].toPrice : targetPrice;
-    const savings = finalValue - totalMelt;
-    const efficiency = totalMelt > 0 ? (finalValue / totalMelt).toFixed(2) : "∞";
-    const hasGaps = steps.some((e) => !e.owned);
-    const ownedCost = steps.filter((e) => e.owned).reduce((s, e) => s + e.cost, 0);
-    const gapCost = steps.filter((e) => !e.owned).reduce((s, e) => s + e.cost, 0);
-
-    allChains.push({
-      seed, steps, totalMelt, finalValue, savings, efficiency,
-      hasGaps, ownedCost, gapCost,
-    });
-  });
-
-  allChains.sort((a, b) => a.totalMelt - b.totalMelt);
-
-  return {
-    target: targetMatch.name,
-    targetPrice,
-    shipCount: shipList.length,
-    ownedEdgeCount: Object.keys(ownedEdges).length,
-    chains: allChains.slice(0, 10),
-    totalFound: allChains.length,
-    _projectRoot: projectRoot,
-  };
+// STEP 11
+function formatChainTable(chain){
+  const{seed,steps,totalMelt,finalValue,savings,efficiency,hasGaps,ownedCost,gapCost}=chain;const l=[];
+  l.push("",`**Seed Ship**: ${seed.actualShip} (${seed.label})`,`  Melt: $${seed.meltValue} | Insurance: ${seed.insurance.join(", ")}`,"");
+  l.push("| # | From | To | From Value | To Value | CCU Cost | Source | Note |","|---|------|----|-----------|---------|----------|--------|------|");
+  if(steps.length===0) l.push(`| - | ${seed.actualShip} | *(at target)* | - | $${finalValue} | - | - | - |`);
+  else steps.forEach((s,i)=>{const src=s.owned?`#${s.ccuid}`:"—",note=s.gap?"⚠️ 无升级":(s.isWarbond?"Warbond":"");l.push(`| ${i+1} | ${s.from} | ${s.to} | $${s.fromPrice} | $${s.toPrice} | $${s.cost} | ${src} | ${note} |`);});
+  const tc=steps.reduce((s,e)=>s+e.cost,0);l.push(`| | **TOTALS** | | | **$${finalValue}** | **$${tc}** | | |`,"");
+  l.push(`- **种子船熔解价值**: $${seed.meltValue}`,`- **自有 CCU 实际成本**: $${ownedCost??tc}`);
+  if(hasGaps||gapCost>0) l.push(`- **断层需购买成本**: $${gapCost||0}`);
+  l.push(`- **总实际成本**: $${totalMelt}`,`- **最终船只价值**: $${finalValue}`,`- **节省**: $${savings} (${efficiency}x value)`);
+  if(hasGaps) l.push(`\n> ⚠️ 含断层 — 标"无升级"的行需从商店原价购买。`);
+  return l.join("\n");
+}
+function formatResults(result){
+  if(result.error) return `Error: ${result.error}`;const l=[];
+  l.push(`## CCU Chain: ${result.seed.actualShip} → **${result.target}** ($${result.targetPrice})`);
+  l.push(`_${result.analysisInfo.upgradeCount} upgrades, ${result.analysisInfo.chainCount} chains, ${result.analysisInfo.isolatedCount} isolated_`,"");
+  l.push(`### Best — $${result.chain.totalMelt} (${result.chain.efficiency}x)`);
+  l.push(formatChainTable(result.chain));
+  if(result.alternatives?.length){l.push("### Alternatives");result.alternatives.forEach((a,i)=>{l.push(`<details><summary>Alt ${i+1}: $${a.totalMelt} (${a.efficiency}x)</summary>\n`);l.push(formatChainTable(a));l.push("</details>\n");});}
+  return l.join("\n");
 }
 
-// ---------------------------------------------------------------------------
-// Formatting
-// ---------------------------------------------------------------------------
-
-/**
- * Format a chain as a markdown table.
- */
-function formatChainTable(chain) {
-  const { seed, steps, totalMelt, finalValue, savings, efficiency, hasGaps, ownedCost, gapCost } = chain;
-  const lines = [];
-
-  lines.push("");
-  lines.push(`**Seed Ship**: ${seed.actualShip} (${seed.label})`);
-  lines.push(`  Melt: $${seed.meltValue} | Insurance: ${seed.insurance.join(", ")}`);
-  lines.push("");
-
-  // 8-column table
-  lines.push("| # | From | To | From Value | To Value | CCU Cost | Source | Note |");
-  lines.push("|---|------|----|-----------|---------|----------|--------|------|");
-
-  if (steps.length === 0) {
-    lines.push(`| - | ${seed.actualShip} | *(already at target)* | - | $${finalValue} | - | - | - |`);
-  } else {
-    steps.forEach((step, i) => {
-      const src = step.owned ? `#${step.ccuid}` : "—";
-      let note = "";
-      if (!step.owned) note = "⚠️ 无可用CCU";
-      else if (step.isWarbond) note = "Warbond";
-      lines.push(
-        `| ${i + 1} | ${step.from} | ${step.to} | $${step.fromPrice} | $${step.toPrice} | $${step.cost} | ${src} | ${note} |`
-      );
-    });
-  }
-
-  // Summary row
-  const totalCCU = steps.reduce((s, e) => s + e.cost, 0);
-  lines.push(`| | **TOTALS** | | | **$${finalValue}** | **$${totalCCU}** | | |`);
-  lines.push("");
-
-  // Stats with gap breakdown
-  lines.push(`- **种子船熔解价值 (Seed melt)**: $${seed.meltValue}`);
-  lines.push(`- **自有 CCU 实际成本**: $${ownedCost != null ? ownedCost : totalMelt - seed.meltValue}`);
-  if (hasGaps || gapCost > 0) {
-    lines.push(`- **断层需购买成本 (Gap cost)**: $${gapCost || 0}`);
-  }
-  lines.push(`- **总实际成本 (Total actual cost)**: $${totalMelt}`);
-  lines.push(`- **最终船只价值 (Final ship value)**: $${finalValue}`);
-  lines.push(`- **节省 (Savings)**: $${savings} (${efficiency}x value)`);
-  if (hasGaps) {
-    lines.push("");
-    lines.push(`> ⚠️ 链条包含断层 — 标有"无可用CCU"的行需要从商店以原价购买升级包。`);
-  }
-
-  return lines.join("\n");
-}
-
-/**
- * Format a result summary showing the best chains.
- */
-function formatResults(result) {
-  if (result.error) return `Error: ${result.error}`;
-
-  const lines = [];
-  lines.push(`## CCU Chains to **${result.target}** (Store Price: $${result.targetPrice})`);
-  lines.push("");
-
-  const totalFound = result.totalFound || 0;
-  const shipCount = result.shipCount || result.graphNodeCount || 0;
-  lines.push(`Found ${totalFound} possible chains from seed ships.`);
-  lines.push(`Search space: ${shipCount} ships, ${result.ownedEdgeCount || result.graphEdgeCount || 0} owned CCU edges.`);
-  lines.push("");
-
-  if (result.chains.length === 0) {
-    lines.push("**No chain found.** The target may not be reachable. This could mean:");
-    lines.push("- The target is cheaper than all your seed ships (CCUs only go UP in price)");
-    lines.push("- No upgrade path exists even with gaps");
-    return lines.join("\n");
-  }
-
-  result.chains.slice(0, 3).forEach((chain, i) => {
-    const gapNote = chain.hasGaps ? " ⚠️ 含断层" : "";
-    lines.push(`### Chain ${i + 1} — Total Cost: $${chain.totalMelt} (${chain.efficiency}x)${gapNote}`);
-    lines.push(formatChainTable(chain));
-    lines.push("");
-  });
-
-  return lines.join("\n");
-}
-
-/**
- * List all ships reachable from the player's seed ships via owned upgrades.
- */
-function listReachableTargets(opts = {}) {
-  const { projectRoot = "." } = opts;
-  const hangar = loadHangarItems(projectRoot);
-  const catalog = loadShipCatalog(projectRoot);
-  const upgrades = hangar.filter((i) => i.category === "Upgrades");
-  const priceMap = buildPriceMap(catalog, upgrades);
-  const graph = buildGraph(upgrades, priceMap, []);
-
-  let seeds = hangar.filter((i) => i.category === "Standalone Ships");
-  seeds = seeds.map((s) => ({
-    id: s.id,
-    label: s.name.trim().split("\n")[0],
-    actualShip: s.actualShip || "",
-    meltValue: s.meltValue,
-  })).filter((s) => s.actualShip);
-
-  const reachable = new Map(); // targetName → { minCost, seedShip }
-  seeds.forEach((seed) => {
-    // BFS from seed to all reachable nodes
-    const visited = new Set();
-    const queue = [{ ship: seed.actualShip, cost: 0 }];
-    visited.add(seed.actualShip);
-
-    while (queue.length > 0) {
-      const { ship, cost } = queue.shift();
-      const edges = graph[ship];
-      if (!edges) continue;
-
-      edges.forEach((e) => {
-        if (visited.has(e.to)) return;
-        visited.add(e.to);
-        const totalCost = seed.meltValue + cost + e.cost;
-        if (!reachable.has(e.to) || reachable.get(e.to).totalCost > totalCost) {
-          reachable.set(e.to, {
-            targetShip: e.to,
-            targetPrice: e.toPrice,
-            totalCost,
-            seedShip: seed.actualShip,
-            seedLabel: seed.label,
-          });
-        }
-        queue.push({ ship: e.to, cost: cost + e.cost });
-      });
-    }
-  });
-
-  return [...reachable.values()].sort((a, b) => a.targetPrice - b.targetPrice);
-}
-
-// ---------------------------------------------------------------------------
-// Exports
-// ---------------------------------------------------------------------------
-
-module.exports = {
-  normalize,
-  matchShip,
-  loadHangarItems,
-  loadShipCatalog,
-  buildPriceMap,
-  buildGraph,
-  findAllPaths,
-  findCheapestChain,
-  findBestPath,
-  listReachableTargets,
-  formatChainTable,
-  formatResults,
-  ALIASES,
-};
+module.exports={setWeights,normalize,matchShip,ALIASES,analyzeUpgrades,buildLocalChains,precompute,findBestChain,formatChainTable,formatResults};

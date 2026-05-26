@@ -4,7 +4,11 @@
       "Bash(node -e ' *)",
       "Bash(npm run *)",
       "Bash(node _explore_ships.js)",
-      "Bash(node src/scrape-ships.js)"
+      "Bash(node src/scrape-ships.js)",
+      "Bash(ls src/ccu.js output/ccu_analysis.json)",
+      "Bash(grep -c \"ccu\\\\|precompute\\\\|CCU\" src/scrape.js)",
+      "Bash(grep -c \"ccu\\\\|precompute\\\\|CCU\" package.json)",
+      "Bash(node -e \"require\\('./src/ccu'\\).precompute\\('.'\\)\")"
     ]
   }
 }
