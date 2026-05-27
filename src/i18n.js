@@ -92,7 +92,10 @@ function exportCompact(root) {
     if (cn.short && !data.cnToEn[cn.short]) data.cnToEn[cn.short] = en;
   }
   const out = { ships: data.ships, items: data.items, paints: data.paints, cnToEn: data.cnToEn };
-  fs.writeFileSync(path.join(root, "output", "i18n.json"), JSON.stringify(out, null, 2));
+  const outDir = path.join(root, "output", "cache");
+  if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
+  fs.writeFileSync(path.join(outDir, "i18n.json"), JSON.stringify(out, null, 2));
+  try { require("./cache-meta").touch(root, "i18n.json", "i18n:setup"); } catch (_) {}
   return out;
 }
 
@@ -114,7 +117,7 @@ function fromChinese(i18n, cnName) {
 
 // 添加翻译映射并保存到缓存 / Add translation and persist
 function addTranslation(root, cnName, enName) {
-  const p = path.join(root, "output", "i18n.json");
+  const p = path.join(root, "output", "cache", "i18n.json");
   const data = fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, "utf-8")) : { ships:{}, paints:{}, items:{}, cnToEn:{} };
   if (!data.cnToEn) data.cnToEn = {};
   if (!data.cnToEn[cnName]) {

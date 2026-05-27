@@ -51,10 +51,11 @@ function matchShip(name, catalog, i18n) {
 // 数据加载 / Data loading
 // ===========================================================================
 function loadHangar(root) { return JSON.parse(fs.readFileSync(path.join(root,"output","hangar_items.json"),"utf-8")); }
-function loadCatalog(root) { return JSON.parse(fs.readFileSync(path.join(root,"output","ships.json"),"utf-8")); }
-function loadI18n(root) { const p = path.join(root,"output","i18n.json"); return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p,"utf-8")) : null; }
+function loadCatalog(root) { return JSON.parse(fs.readFileSync(path.join(root,"output","cache","ships.json"),"utf-8")); }
+function loadI18n(root) { const p = path.join(root,"output","cache","i18n.json"); return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p,"utf-8")) : null; }
 function loadCustomCCUs(root) { const p = path.join(root,"output","custom_ccus.json"); return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p,"utf-8")) : []; }
 function saveCustomCCUs(root, data) { fs.writeFileSync(path.join(root,"output","custom_ccus.json"), JSON.stringify(data, null, 2)); }
+function loadHistoricalCCUs(root, dateFrom) { try { return require("./historical-ccu").loadHistoricalCCUs(root, dateFrom); } catch(_) { return {}; } }
 
 // ===========================================================================
 // 价格映射 / Price map
@@ -65,7 +66,7 @@ function buildPriceMap(catalog) { const m = {}; catalog.forEach(s => { m[s.name]
 // 核心：Dijkstra 最优路径 / Optimal path via Dijkstra
 // ===========================================================================
 function findBestChain(opts = {}) {
-  const { seedShip, targetShip, projectRoot: root = ".", excludeIds = [] } = opts;
+  const { seedShip, targetShip, projectRoot: root = ".", excludeIds = [], useHistorical } = opts;
   const catalog = loadCatalog(root), i18n = loadI18n(root);
   const hangar = loadHangar(root);
   const priceMap = buildPriceMap(catalog);
@@ -109,6 +110,46 @@ function findBestChain(opts = {}) {
     if (!ownedEdges[key] || (c.actualCost||0) < ownedEdges[key].cost) ownedEdges[key] = { cost: c.actualCost||0, id: "custom_"+key.replace(/[^a-zA-Z0-9]/g,"_"), isWarbond: c.isWarbond||false, custom: true };
   });
 
+  // 历史 WB CCU 边 / Historical Warbond CCU edges
+  if (useHistorical) {
+    let dateFrom;
+    if (typeof useHistorical === "string") dateFrom = new Date(useHistorical);
+    else if (useHistorical instanceof Date) dateFrom = useHistorical;
+    else { dateFrom = new Date(); dateFrom.setFullYear(dateFrom.getFullYear() - 1); } // default 1 year
+
+    const histCCUs = loadHistoricalCCUs(root, dateFrom);
+
+    for (const [toShip, info] of Object.entries(histCCUs)) {
+      if (!info.bestWbPrice || info.bestWbPrice >= info.regularPrice) continue;
+      const toShipPrice = priceMap[toShip] || info.regularPrice;
+      const wbValue = info.bestWbPrice;
+      if (wbValue >= toShipPrice) continue;
+      if (wbValue <= seed.storePrice) continue;
+
+      // For every ship in the catalog cheaper than wbValue, add a discounted edge
+      for (const fromShip of catalog) {
+        if (fromShip.price >= wbValue) continue;
+        if (fromShip.name === toShip) continue;
+
+        const ek = fromShip.name + "→" + toShip;
+        // Don't override owned edges (real CCU always preferred)
+        if (ownedEdges[ek]) continue;
+
+        const edgeCost = wbValue - fromShip.price;
+        const normalCost = toShipPrice - fromShip.price;
+        if (edgeCost >= normalCost) continue; // no benefit
+
+        ownedEdges[ek] = {
+          cost: edgeCost,
+          id: "hist_" + ek.replace(/[^a-zA-Z0-9]/g, "_"),
+          isWarbond: true,
+          historical: true,
+          historicalInfo: { wbValue, regularPrice: info.regularPrice, date: info.wbDate, event: info.wbEvent },
+        };
+      }
+    }
+  }
+
   // Dijkstra: 从种子到所有船的最短路 / Dijkstra on complete price graph
   const shipList = catalog.filter(s => s.price > seed.storePrice).sort((a,b) => a.price - b.price);
   const dist = {}, prev = {};
@@ -136,7 +177,7 @@ function findBestChain(opts = {}) {
       const nd = dist[cur] + edgeCost;
       if (nd < (dist[neighbor]||Infinity)) {
         dist[neighbor] = nd;
-        prev[neighbor] = { from: cur, to: neighbor, fromPrice: curPrice, toPrice: s.price, cost: edgeCost, owned: !!owned, ccuid: owned?.id||"", isWarbond: owned?.isWarbond||false, custom: owned?.custom||false };
+        prev[neighbor] = { from: cur, to: neighbor, fromPrice: curPrice, toPrice: s.price, cost: edgeCost, owned: !!owned, ccuid: owned?.id||"", isWarbond: owned?.isWarbond||false, custom: owned?.custom||false, historical: owned?.historical||false, historicalInfo: owned?.historicalInfo||null };
       }
     }
   }
@@ -149,11 +190,12 @@ function findBestChain(opts = {}) {
   const tccu = steps.reduce((s,e) => s + e.cost, 0), oc = steps.filter(e => e.owned).reduce((s,e) => s + e.cost, 0);
   const gc = steps.filter(e => !e.owned).reduce((s,e) => s + e.cost, 0), tm = seed.meltValue + tccu;
   const fv = tp, sv = fv - tm, ef = tm > 0 ? (fv/tm).toFixed(2) : "∞", hg = steps.some(e => !e.owned);
+  const hasHistorical = steps.some(e => e.owned && e.historical);
 
   return {
     target: target.name, targetPrice: tp, seed,
-    chain: { seed, steps, totalMelt: tm, finalValue: fv, savings: sv, efficiency: ef, hasGaps: hg, ownedCost: oc, gapCost: gc },
-    analysisInfo: { ownedEdges: Object.keys(ownedEdges).length, shipCount: shipList.length },
+    chain: { seed, steps, totalMelt: tm, finalValue: fv, savings: sv, efficiency: ef, hasGaps: hg, ownedCost: oc, gapCost: gc, hasHistorical },
+    analysisInfo: { ownedEdges: Object.keys(ownedEdges).length, shipCount: shipList.length, useHistorical: !!useHistorical },
   };
 }
 
@@ -175,10 +217,21 @@ function formatChainTable(chain, i18n) {
   l.push("| # | From | To | From Value | To Value | CCU Cost | Source | Note |","|---|------|----|-----------|---------|----------|--------|------|");
   if (!steps.length) l.push(`| - | ${cn(seed.actualShip)} | *(at target)* | - | $${finalValue} | - | - | - |`);
   else steps.forEach((s,i) => {
-    const src = s.owned ? (s.custom ? "自定义" : `#${s.ccuid}`) : "—";
-    let note = s.owned ? "" : "⚠️ 无升级";
-    if (s.owned && s.isWarbond) note = "Warbond" + (s.custom ? " (自定义)" : "");
-    else if (s.owned && s.custom) note = "(自定义)";
+    let src, note;
+    if (s.owned && s.historical) {
+      src = "历史WB";
+      note = "历史WB";
+      if (s.historicalInfo) note += ` ($${s.historicalInfo.wbValue}, ${s.historicalInfo.date||""})`;
+    } else if (s.owned && s.custom) {
+      src = "自定义";
+      note = s.isWarbond ? "Warbond (自定义)" : "(自定义)";
+    } else if (s.owned) {
+      src = `#${s.ccuid}`;
+      note = s.isWarbond ? "Warbond" : "";
+    } else {
+      src = "—";
+      note = "⚠️ 无升级";
+    }
     l.push(`| ${i+1} | ${cn(s.from)} | ${cn(s.to)} | $${s.fromPrice} | $${s.toPrice} | $${s.cost} | ${src} | ${note} |`);
   });
   const tc = steps.reduce((s,e) => s + e.cost, 0);
@@ -187,6 +240,8 @@ function formatChainTable(chain, i18n) {
   if (hasGaps||gapCost>0) l.push(`- **断层需购买成本**: $${gapCost||0}`);
   l.push(`- **总实际成本**: $${totalMelt}`,`- **最终船只价值**: $${finalValue}`,`- **节省**: $${savings} (${efficiency}x value)`);
   if (hasGaps) l.push(`\n> ⚠️ 含断层 — 标"无升级"的行需从商店原价购买。`);
+  const hasHistorical = steps.some(e => e.owned && e.historical);
+  if (hasHistorical) l.push(`\n> 💰 含历史WB CCU — 这些是过往限时折扣价，你可能已拥有该CCU；若未拥有则需从grey market获取或等待下次促销。`);
   return l.join("\n");
 }
 
@@ -196,11 +251,12 @@ function formatResults(result, i18n) {
   const cn = i18n?.ships ? (n) => { for (const c of [n, n.replace(/-/g," "), n.replace(/ /g,"-")]) { const e = i18n.ships[c]; if (e) return e.short||e.full||n; } return n; } : (n)=>n;
   const l=[];
   l.push(`## CCU Chain: ${cn(result.seed.actualShip)} → **${cn(result.target)}** ($${result.targetPrice})`);
-  l.push(`_${result.analysisInfo.ownedEdges} owned CCU edges, ${result.analysisInfo.shipCount} ships in graph_`,"");
+  const histInfo = result.analysisInfo.useHistorical ? ", +历史WB数据" : "";
+  l.push(`_${result.analysisInfo.ownedEdges} CCU edges, ${result.analysisInfo.shipCount} ships in graph${histInfo}_`,"");
   l.push(`### Best — $${result.chain.totalMelt} (${result.chain.efficiency}x)`);
   l.push(formatChainTable(result.chain, i18n));
   return l.join("\n");
 }
 
 const { addTranslation } = require("./i18n");
-module.exports = { setWeights, normalize, matchShip, ALIASES, findBestChain, formatChainTable, formatResults, loadCustomCCUs, saveCustomCCUs, addTranslation };
+module.exports = { setWeights, normalize, matchShip, ALIASES, findBestChain, formatChainTable, formatResults, loadCustomCCUs, saveCustomCCUs, loadHistoricalCCUs, addTranslation };

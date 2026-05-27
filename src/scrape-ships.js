@@ -9,7 +9,7 @@ const HEADLESS = process.argv.includes("--headless");
 
 async function main() {
   const dir = path.join(ROOT, "user_data");
-  const out = path.join(OUT, "ships.json");
+  const out = path.join(OUT, "cache", "ships.json");
   if (!FORCE && fs.existsSync(out)) {
     const ships = JSON.parse(fs.readFileSync(out, "utf-8"));
     console.log(`Ships exist: ${ships.length}, ${ships.filter(s=>s.price).length} priced. --force to re-scrape`);
@@ -20,7 +20,8 @@ async function main() {
   if (!(await checkSession(context))) { console.log("Session expired — npm run login"); await cleanup(); process.exit(1); }
   let ships;
   try { ships = await scrapeAllShips(context); } finally { await cleanup(); }
-  exportJSON(ships, path.join(OUT, "ships.json"));
+  exportJSON(ships, path.join(OUT, "cache", "ships.json"));
+  try { require("./cache-meta").touch(ROOT, "ships.json", "scrape:ships"); } catch (_) {}
   exportCSV(ships, path.join(OUT, "ships.csv"));
   console.log(`\nDone: ${ships.length} ships, ${ships.filter(s=>s.price).length} priced`);
 }

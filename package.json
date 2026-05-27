@@ -11,6 +11,8 @@
     "scrape:ships:headless": "node src/scrape-ships.js --headless",
     "scrape:store": "node src/scrape-store.js",
     "scrape:store:headless": "node src/scrape-store.js --headless",
+    "scrape:historical": "node src/scrape-historical.js",
+    "scrape:historical:headless": "node src/scrape-historical.js --headless",
     "validate": "node src/validate.js"
   },
   "dependencies": {

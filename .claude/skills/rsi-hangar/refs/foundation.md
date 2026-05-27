@@ -8,13 +8,16 @@
 ```
 ./
 ├── src/
-│   ├── hangar.js       # 核心库：登录、爬取、导出
-│   ├── login.js        # 交互式登录 CLI
-│   ├── scrape.js       # 机库爬取 CLI
-│   ├── scrape-ships.js # 船只目录爬取 CLI
-│   ├── ships.js        # 船只目录模块
-│   ├── ccu.js          # CCU 升级链计算
-│   └── validate.js     # 数据验证
+│   ├── hangar.js            # 核心库：登录、爬取、导出
+│   ├── login.js             # 交互式登录 CLI
+│   ├── scrape.js            # 机库爬取 CLI
+│   ├── scrape-ships.js      # 船只目录爬取 CLI
+│   ├── scrape-historical.js # 历史 CCU 数据爬取 CLI
+│   ├── ships.js             # 船只目录模块
+│   ├── ccu.js               # CCU 升级链计算
+│   ├── historical-ccu.js    # scorg.tools 历史 CCU 抓取模块
+│   ├── cache-meta.js        # 缓存元数据（时间戳管理）
+│   └── validate.js          # 数据验证
 ├── output/             # 导出数据
 ├── user_data/          # Chrome 持久会话
 ├── docs/ccu-rules.md   # CCU 规则参考
@@ -31,6 +34,8 @@
 | `npm run scrape:headless` | 同上，无头模式 |
 | `npm run scrape:ships` | 爬取船只目录 |
 | `npm run scrape:ships:headless` | 同上，无头模式 |
+| `npm run scrape:historical` | 抓取 scorg.tools 历史 CCU 数据 |
+| `npm run scrape:historical:headless` | 同上，无头模式 |
 | `npm run validate` | 数据质量检查 |
 
 工作目录：所有命令在项目根目录运行。
@@ -47,15 +52,17 @@
 node -e "require('./src/i18n').setup('.')"   # 下载+解析
 ```
 
-导出 `output/i18n.json`（335 船 + 960 涂装 + 1717 中→英映射）。
+导出 `output/cache/i18n.json`（335 船 + 960 涂装 + 1717 中→英映射）。
 
 **交互流程**（由 LLM 进行模糊匹配和消歧）：
 
 1. **代码精确匹配** — `matchShip(name, catalog, i18n)` 查 `cnToEn` 映射 + `ships` 的 full/short 名称。
 2. **LLM 模糊匹配** — 代码未命中时 LLM 根据 i18n 数据消歧。
 3. **匹配后写入缓存** — `addTranslation(root, cnName, enName)` 保存到 `i18n.json`。
-4. **缓存缺失** — 自动 `setup('.')` 下载。
+4. **缓存缺失** — 未匹配到名称时自动 `setup('.')` 下载，刷新缓存。
 5. **仍不确定** — 列出候选询问用户。
+
+**注意**：当自动 `setup('.')` 下载仍旧无法匹配，立刻返回询问用户，**不要自行试图解释和搜索**
 
 > 代码仅负责精确映射。模糊匹配由 LLM 判断。匹配成功后自动缓存供后续使用。
 
@@ -88,7 +95,11 @@ npm run scrape:ships:headless   # 船只目录
 
 输出文件：
 - `output/hangar_items.json` — 机库物品
-- `output/ships.json` — 船只商店价格
+- `output/hangar_items.json` — 机库物品
+- `output/cache/ships.json` — 船只商店价格缓存
+- `output/cache/i18n.json` — 翻译缓存
+- `output/cache/historical_ccus.json` — 历史 CCU 缓存
+- `output/cache/.cache_meta.json` — 缓存元数据（更新时间戳）
 - `output/ccu_analysis.json` — CCU 预计算
 
 > 数据已存在时自动跳过。使用 `--force` 强制刷新。
@@ -146,6 +157,22 @@ npm run scrape:ships:headless   # 船只目录
 | `roles` | string[] | 角色标签（如 `["Multi-role", "Starter"]`） |
 | `url` | string | pledge store 详情页 URL |
 
+### historical_ccus.json — 历史 CCU 数据
+
+数组，最后一项为 `_metadata`。每个船包含：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `shipName` | string | 船名（匹配 catalog） |
+| `rawName` | string | scorg.tools 原始名 |
+| `shipId` | string | scorg ship ID |
+| `regularPrice` | number | MSRP / CCU 价值 |
+| `history[]` | object | CCU 历史数组 |
+| `history[].date` | string | 日期 (YYYY-MM-DD) |
+| `history[].status` | string | Warbond / Available / NoLongerOnSale / WarbondEnded |
+| `history[].price` | number\|null | Warbond 折扣价（非 WB 状态为 null） |
+| `history[].event` | string | 活动名（如 "Invictus 2953"） |
+
 ## 数据验证 / Validate
 
 需要时手动调用：
@@ -165,7 +192,15 @@ npm run validate
 `scrapeAllShips` `extractShipCards` `exportJSON` `exportCSV`
 
 ### ccu.js
-`precompute` `findBestChain({seedShip, targetShip, projectRoot, excludeIds})` `formatChainTable` `formatResults` `setWeights` `matchShip`
+`findBestChain({seedShip, targetShip, projectRoot, excludeIds, useHistorical})` `formatChainTable` `formatResults` `setWeights` `matchShip` `loadHistoricalCCUs` `loadCustomCCUs` `saveCustomCCUs`
+
+- `useHistorical` — 可选。传 `true`（默认1年）、Date 对象或日期字符串如 `"2025-05-28"`。加载 `output/cache/historical_ccus.json` 中的历史 WB 价格，在图中添加折扣边。
+
+### historical-ccu.js
+`scrapeFullHistory` `fetchShipHistory` `loadHistoricalCCUs` `exportJSON` `getCacheMetadata`
+
+### cache-meta.js
+`touch(root, name, source)` `check(root, name, maxAgeMs)` `all(root)` `readMeta(root)` `writeMeta(root, data)`
 
 ## 注意事项 / Notes
 

@@ -22,7 +22,7 @@
 
 ### Step 2 — 确认目标船
 
-查 `output/ships.json`，变体列出供选择，标注价格。
+查 `output/cache/ships.json`，变体列出供选择，标注价格。
 
 ```
 "Constellation" 系列：
@@ -36,15 +36,79 @@
 
 询问是否排除特定 CCU ID。
 
-### Step 4 — 免责声明
+### Step 4 — 历史 CCU 数据（可选）
 
-> ⚠️ 此为模拟计算，不会实际部署升级包。你需要手动在机库中应用每个 CCU。
+询问用户：
 
-### Step 5 — 计算输出（一行命令，禁止手工推算）
+"是否使用外部网站 (scorg.tools) 获取的历史 CCU 信息来寻找更优升级路径？"
+
+若用户选择**否** → 跳过，仅用自有 CCU。
+
+若用户选择**是**：
+
+"以今日为基准，前推几年几月几日？（例如：1年、6个月）"
+
+解析用户输入为日期字符串（如 `"2025-05-28"`）。
+
+检查 `output/cache/historical_ccus.json`：
+- **存在且覆盖范围** → 直接加载，传入 `useHistorical: "2025-05-28"`
+- **部分覆盖** → 告知现有范围（`getCacheMetadata()`），询问继续使用或重抓
+- **不存在** → 告知用户需在线获取（约 8-12 分钟），同时：
+  1. 子 agent 后台执行 `npm run scrape:historical:headless` 建立全量缓存
+  2. 主 agent 按无历史数据先计算链条，然后进入断层分析（Step 5）
+
+使用历史数据时的调用（一行命令）：
 
 ```js
 const { findBestChain, formatResults } = require("./src/ccu");
-const i18n = require("./output/i18n.json");
+const i18n = require("./output/cache/i18n.json");
+console.log(formatResults(findBestChain({
+  seedShip: "极光 mk2",
+  targetShip: "铁突",
+  projectRoot: ".",
+  useHistorical: "2025-05-28",   // 历史 CCU 数据起算日期
+  excludeIds: ["93520320"],
+}), i18n));
+```
+
+### Step 5 — 断层分析（可选）
+
+若 `findBestChain()` 返回的链条包含断层（`hasGaps: true` 或表格有 "⚠️ 无升级" 行）：
+
+询问用户：
+
+"链条中存在断层船只。是否针对断层船只搜索历史 CCU 数据来尝试优化？"
+
+若用户选择**是**：
+
+对每个断层船只（chain steps 中 `owned === false` 的 step.to）：
+1. 检查 `output/cache/historical_ccus.json` 缓存中是否有该船历史 WB 数据
+2. 若有 → 直接提取 `bestWbPrice`，加入临时 historical edge
+3. 若缓存缺失该船 → 主 agent 直接 Playwright 访问 scorg.tools 获取：
+
+```js
+const { chromium } = require("playwright");
+const { fetchShipHistory, loadHistoricalCCUs } = require("./src/historical-ccu");
+const ctx = await chromium.launchPersistentContext("user_data", { channel: "chrome", headless: true });
+const data = await fetchShipHistory(ctx, "断层船名", catalog, i18n);
+await ctx.close();
+// 将 data 的 WB 价格转为临时 historical edge 加入计算
+```
+
+4. 将断层船的历史 WB 价格作为临时 historical edge 重新运行 `findBestChain()`
+5. 报告优化结果
+
+此步骤使用主 agent（非子 agent），因仅抓取 1-3 艘船，每艘约 10-15 秒。
+
+### Step 6 — 免责声明（原 Step 4）
+
+> ⚠️ 此为模拟计算，不会实际部署升级包。你需要手动在机库中应用每个 CCU。
+
+### Step 7 — 计算输出（一行命令，禁止手工推算）
+
+```js
+const { findBestChain, formatResults } = require("./src/ccu");
+const i18n = require("./output/cache/i18n.json");
 console.log(formatResults(findBestChain({
   seedShip: "极光 mk2",
   targetShip: "铁突",
