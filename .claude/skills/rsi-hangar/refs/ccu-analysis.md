@@ -48,16 +48,17 @@
 ### Step 5 — 计算并输出（一行命令，禁止手工推算）
 
 **必须使用 `findBestChain()` 单次调用**，禁止逐链手工分析。代码算法优于人工推算。
+**必须加载 i18n 并传递给 `formatResults`** 以实现本地化船名显示。
 
 ```js
 const { findBestChain, formatResults } = require("./src/ccu");
-const r = findBestChain({
-  seedShip: "Aurora Mk II",   // 种子船名或 hangar ID
-  targetShip: "Carrack",      // 目标船名
+const i18n = require("./output/i18n.json");
+console.log(formatResults(findBestChain({
+  seedShip: "Aurora Mk II",
+  targetShip: "Carrack",
   projectRoot: ".",
   excludeIds: ["93520320"],   // 可选
-});
-console.log(formatResults(r));
+}), i18n));  // ← 必须传 i18n
 ```
 
 ## 输出格式

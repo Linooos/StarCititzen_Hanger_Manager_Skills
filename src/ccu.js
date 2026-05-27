@@ -199,11 +199,6 @@ function findBestChain(opts={}) {
         const full=ch.slice(si);let cs2=full[0].fromValue,ce=full[full.length-1].toValue;
         if(ce>tp){let ti=full.findIndex(x=>x.toValue>tp);if(ti<0)ti=full.length;full.length=ti;if(full.length===0)continue;ce=full[full.length-1].toValue;}
         if(cs2<tp&&ce>curPrice){cands.push({ci,suffix:[...full],cStart:cs2,cEnd:ce});}
-        // Also add first few partials (1 step, 2 steps)
-        for(let cut=1;cut<=Math.min(2,full.length);cut++){
-          let s=full.slice(0,cut);let ce2=s[s.length-1].toValue;
-          if(ce2<=curPrice||ce2>tp)continue;
-          cands.push({ci,suffix:s,cStart:cs2,cEnd:ce2});}
       }
       // Also add "just gap to end" as a candidate (skip all chains)
       if(cands.length===0||depth<=0) return _greedyFinish(curPrice,curShip,usedSet,pathSoFar);
