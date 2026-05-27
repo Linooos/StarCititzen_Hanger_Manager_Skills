@@ -10,7 +10,8 @@
       "Bash(grep -c \"ccu\\\\|precompute\\\\|CCU\" package.json)",
       "Bash(node -e \"require\\('./src/ccu'\\).precompute\\('.'\\)\")",
       "Bash(rm -rf user_data)",
-      "Bash(rm -rf output/*)"
+      "Bash(rm -rf output/*)",
+      "Bash(node -e \"require\\('./src/i18n'\\).setup\\('.'\\)\")"
     ]
   }
 }

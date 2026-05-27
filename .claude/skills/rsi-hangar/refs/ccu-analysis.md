@@ -4,6 +4,8 @@
 
 ## 交互流程
 
+**数据时效**：进入 CCU 分析时，检查 `output/cache/ships.json` 的上次更新时间（通过 `cache-meta.js` 的 `.cache_meta.json`）。若超过 30 天未更新，提示用户："船只目录数据已超过一个月未更新，价格可能有变动。是否刷新？"（`npm run scrape:ships:headless`）。用户拒绝则继续使用现有数据。
+
 ### Step 1 — 确认种子船
 
 加载 `output/hangar_items.json`，筛选 `Standalone Ships` + `Game Packages`，列出选项。
@@ -42,22 +44,36 @@
 
 "是否使用外部网站 (scorg.tools) 获取的历史 CCU 信息来寻找更优升级路径？"
 
-若用户选择**否** → 跳过，仅用自有 CCU。
+若用户选择**否** → 跳过，仅用自有 CCU（默认模式）。
 
-若用户选择**是**：
+若用户选择**是**，先询问时间范围：
 
 "以今日为基准，前推几年几月几日？（例如：1年、6个月）"
 
-解析用户输入为日期字符串（如 `"2025-05-28"`）。
+解析为日期字符串（如 `"2025-05-28"`）。
 
-检查 `output/cache/historical_ccus.json`：
-- **存在且覆盖范围** → 直接加载，传入 `useHistorical: "2025-05-28"`
-- **部分覆盖** → 告知现有范围（`getCacheMetadata()`），询问继续使用或重抓
-- **不存在** → 告知用户需在线获取（约 8-12 分钟），同时：
-  1. 子 agent 后台执行 `npm run scrape:historical:headless` 建立全量缓存
-  2. 主 agent 按无历史数据先计算链条，然后进入断层分析（Step 5）
+> **注意**：此日期是 **CCU 事件的时间窗口起点**，而非缓存文件的过期时间。含义：从该日期到今天，在此期间 scorg.tools 记录过的 WB CCU 事件均可参与计算。例如用户说"3 年"→ 2023 年至今，则 2024-07-12 的 WB 事件在窗口内、会被纳入；2022 年的事件不在窗口内、被排除。该日期最终传给 `findBestChain({ useHistorical: "2023-05-28" })`。
 
-使用历史数据时的调用（一行命令）：
+然后检查 `output/cache/historical_ccus.json` 是否存在：
+
+---
+
+**情况 A：缓存不存在** → 仅可使用**部分模式**。告知用户：
+
+> "本地暂无历史 CCU 全量缓存。当前使用**部分模式**：先用机库内 CCU 计算链条，再针对链条中的断层船只，即时在线搜索其历史 CCU 信息来优化。全量缓存需约 4 分钟抓取，若需全量模式可稍后获取。"
+
+然后按 Step 5（断层分析）流程执行。
+
+---
+
+**情况 B：缓存存在** → 让用户选择模式：
+
+> "历史 CCU 缓存已存在。请选择模式：
+> 1. **全量模式** — 从缓存中提取指定时间范围内所有历史 WB CCU，与机库 CCU 共同参与 Dijkstra 计算，生成历史 CCU 接入更多的全局最优链条。计算快（~30ms），覆盖面广。
+> 2. **部分模式** — 先用机库内 CCU 计算链条，再针对断层船只从缓存或在线搜索历史 CCU 优化。适合只想补漏的场景。"
+
+根据用户选择：
+- **全量模式** → 检查缓存文件本身的新鲜度（`cache-meta.js`，超过 7 天提示刷新。**注意：此处 7 天是缓存文件的磁盘年龄，与上面 CCU 事件的时间窗口是两回事**），加载后传入 `useHistorical: "2025-05-28"`：
 
 ```js
 const { findBestChain, formatResults } = require("./src/ccu");
@@ -66,39 +82,41 @@ console.log(formatResults(findBestChain({
   seedShip: "极光 mk2",
   targetShip: "铁突",
   projectRoot: ".",
-  useHistorical: "2025-05-28",   // 历史 CCU 数据起算日期
+  useHistorical: "2025-05-28",
   excludeIds: ["93520320"],
 }), i18n));
 ```
 
-### Step 5 — 断层分析（可选）
+- **部分模式** → 进入 Step 5（断层分析）。
 
-若 `findBestChain()` 返回的链条包含断层（`hasGaps: true` 或表格有 "⚠️ 无升级" 行）：
+---
 
-询问用户：
+**获取/更新全量缓存**：用户可随时要求 `npm run scrape:historical:headless`（约 4 分钟，237 艘船），之后即可使用全量模式。
 
-"链条中存在断层船只。是否针对断层船只搜索历史 CCU 数据来尝试优化？"
+> **严禁自动获取全量缓存**：即使 `output/cache/historical_ccus.json` 不存在，也不得自行执行 `npm run scrape:historical` 或后台抓取全量数据。只有用户明确说"获取全量缓存""刷新历史CCU""使用全量模式"等指令时才可执行。缓存不存在时默认使用部分模式，告知用户现状即可。
 
-若用户选择**是**：
+---
 
-对每个断层船只（chain steps 中 `owned === false` 的 step.to）：
-1. 检查 `output/cache/historical_ccus.json` 缓存中是否有该船历史 WB 数据
-2. 若有 → 直接提取 `bestWbPrice`，加入临时 historical edge
-3. 若缓存缺失该船 → 主 agent 直接 Playwright 访问 scorg.tools 获取：
+### Step 5 — 断层分析（部分模式）
+
+先只用机库 CCU 计算链条（不加 `useHistorical`）。若链条有断层（`hasGaps: true` 或 "⚠️ 无升级" 行）：
+
+对每个断层船只（`owned === false` 的 step.to）：
+1. 检查 `output/cache/historical_ccus.json` 缓存中是否有该船 WB 数据 → 有则提取 `bestWbPrice`
+2. 缓存无此船 → 主 agent 在线获取：
 
 ```js
 const { chromium } = require("playwright");
-const { fetchShipHistory, loadHistoricalCCUs } = require("./src/historical-ccu");
+const { fetchShipHistory } = require("./src/historical-ccu");
 const ctx = await chromium.launchPersistentContext("user_data", { channel: "chrome", headless: true });
 const data = await fetchShipHistory(ctx, "断层船名", catalog, i18n);
 await ctx.close();
-// 将 data 的 WB 价格转为临时 historical edge 加入计算
 ```
 
-4. 将断层船的历史 WB 价格作为临时 historical edge 重新运行 `findBestChain()`
-5. 报告优化结果
+3. 将获取的 WB 价格转为临时 historical edge，重新运行 `findBestChain()`
+4. 报告优化后的链条
 
-此步骤使用主 agent（非子 agent），因仅抓取 1-3 艘船，每艘约 10-15 秒。
+> 部分模式每艘断层船约 10-15 秒。不需要全量缓存即可使用。
 
 ### Step 6 — 免责声明（原 Step 4）
 
@@ -151,5 +169,6 @@ addTranslation(".", "铁突", "Ironclad-Assault");
 ## 规则
 
 - **严禁同价侧级过渡**：CCU 只能从低价升级到高价，禁止 $0 差价
+- **严禁自动获取全量历史 CCU 缓存**：即使 `output/cache/historical_ccus.json` 不存在，也不得自行执行 `npm run scrape:historical` 或在后台抓取全量数据。只有用户明确要求"获取全量缓存""刷新历史CCU""使用全量模式"时才可执行。缓存缺失时默认使用部分模式，告知用户即可。
 - 无合法路径时显示 "No valid path"
 - CCU 规则详见 `docs/ccu-rules.md`

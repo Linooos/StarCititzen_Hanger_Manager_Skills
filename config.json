@@ -1,7 +1,0 @@
-{
-    "base_url": "https://robertsspaceindustries.com",
-    "login_url": "https://robertsspaceindustries.com/en/sign-in",
-    "hangar_url": "https://robertsspaceindustries.com/en/account/pledges",
-    "user_data_dir": "user_data",
-    "output_dir": "output"
-}

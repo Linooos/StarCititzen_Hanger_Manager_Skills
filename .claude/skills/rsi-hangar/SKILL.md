@@ -28,7 +28,7 @@ description: >
 
 ## 规则
 
-1. **每次对话开始时**，检查 `output/` 下数据是否存在。若缺失，执行 foundation.md 中的登录+爬取流程。
+1. **每次对话开始时**，检查以下三项核心数据是否存在：`user_data/`（登录会话）、`output/hangar_items.json`（机库数据）、`output/cache/ships.json`（船只目录）。**任意缺失则告知用户并立即执行对应获取命令，不得询问用户是否获取。** 详见 foundation.md 启动时自动检查。
 2. CCU 分析必须用 `findBestChain()` 单次调用 + `formatResults(result, i18n)` 输出本地化表格。
 3. CCU 输出前必须声明免责声明。
 4. 严禁同价侧级过渡（$0 gap），算法已内置禁止。

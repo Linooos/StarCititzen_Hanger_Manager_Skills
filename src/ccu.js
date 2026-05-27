@@ -62,6 +62,43 @@ function loadHistoricalCCUs(root, dateFrom) { try { return require("./historical
 // ===========================================================================
 function buildPriceMap(catalog) { const m = {}; catalog.forEach(s => { m[s.name] = s.price; }); return m; }
 
+/** Patch $0 catalog prices from historical CCU cache (scorg.tools has all prices). */
+function patchZeroPrices(catalog, root) {
+  const zeroShips = catalog.filter(s => s.price === 0);
+  if (zeroShips.length === 0) return { patched: 0 };
+
+  // Try historical_ccus.json (has regularPrice from scorg.tools for all ships)
+  let histPrices = {};
+  try {
+    const hist = require("./historical-ccu").loadHistoricalCCUs(root);
+    // loadHistoricalCCUs returns {ShipName: {regularPrice, bestWbPrice}}. But we need ALL ships, not just WB ones.
+    // Load raw cache for all ship prices
+    const p = require("path").join(root, "output", "cache", "historical_ccus.json");
+    if (require("fs").existsSync(p)) {
+      const raw = JSON.parse(require("fs").readFileSync(p, "utf-8"));
+      const ships = Array.isArray(raw) ? raw.filter(s => !s._metadata) : (raw.ships || []);
+      ships.forEach(s => { if (s.shipName && s.regularPrice > 0) histPrices[s.shipName] = s.regularPrice; });
+    }
+  } catch (_) {}
+
+  let patched = 0;
+  const norm = (n) => (n||"").toLowerCase().replace(/[-]/g," ").replace(/\s+/g," ").trim();
+
+  for (const s of catalog) {
+    if (s.price !== 0) continue;
+    // Exact match
+    if (histPrices[s.name] > 0) { s.price = histPrices[s.name]; patched++; continue; }
+    // Normalized match (handles "C2-Hercules" vs "C2 Hercules")
+    const ns = norm(s.name);
+    const key = Object.keys(histPrices).find(k => norm(k) === ns);
+    if (key && histPrices[key] > 0) { s.price = histPrices[key]; patched++; continue; }
+    // Substring match (last resort)
+    const key2 = Object.keys(histPrices).find(k => norm(k).includes(ns) || ns.includes(norm(k)));
+    if (key2 && histPrices[key2] > 0) { s.price = histPrices[key2]; patched++; }
+  }
+  return { patched, stillZero: catalog.filter(s => s.price === 0).map(s => s.name) };
+}
+
 // ===========================================================================
 // 核心：Dijkstra 最优路径 / Optimal path via Dijkstra
 // ===========================================================================
@@ -69,6 +106,9 @@ function findBestChain(opts = {}) {
   const { seedShip, targetShip, projectRoot: root = ".", excludeIds = [], useHistorical } = opts;
   const catalog = loadCatalog(root), i18n = loadI18n(root);
   const hangar = loadHangar(root);
+
+  // 修补 $0 价格 / Patch zero prices
+  const pricePatch = patchZeroPrices(catalog, root);
   const priceMap = buildPriceMap(catalog);
 
   // 解析目标 / Resolve target
@@ -195,7 +235,7 @@ function findBestChain(opts = {}) {
   return {
     target: target.name, targetPrice: tp, seed,
     chain: { seed, steps, totalMelt: tm, finalValue: fv, savings: sv, efficiency: ef, hasGaps: hg, ownedCost: oc, gapCost: gc, hasHistorical },
-    analysisInfo: { ownedEdges: Object.keys(ownedEdges).length, shipCount: shipList.length, useHistorical: !!useHistorical },
+    analysisInfo: { ownedEdges: Object.keys(ownedEdges).length, shipCount: shipList.length, useHistorical: !!useHistorical, pricePatch },
   };
 }
 
@@ -252,7 +292,9 @@ function formatResults(result, i18n) {
   const l=[];
   l.push(`## CCU Chain: ${cn(result.seed.actualShip)} → **${cn(result.target)}** ($${result.targetPrice})`);
   const histInfo = result.analysisInfo.useHistorical ? ", +历史WB数据" : "";
-  l.push(`_${result.analysisInfo.ownedEdges} CCU edges, ${result.analysisInfo.shipCount} ships in graph${histInfo}_`,"");
+  const patchInfo = result.analysisInfo.pricePatch?.patched > 0
+    ? ` (${result.analysisInfo.pricePatch.patched}艘价格从scorg补全)` : "";
+  l.push(`_${result.analysisInfo.ownedEdges} CCU edges, ${result.analysisInfo.shipCount} ships in graph${histInfo}${patchInfo}_`,"");
   l.push(`### Best — $${result.chain.totalMelt} (${result.chain.efficiency}x)`);
   l.push(formatChainTable(result.chain, i18n));
   return l.join("\n");

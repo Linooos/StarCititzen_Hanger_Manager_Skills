@@ -54,6 +54,8 @@ node -e "require('./src/i18n').setup('.')"   # 下载+解析
 
 导出 `output/cache/i18n.json`（335 船 + 960 涂装 + 1717 中→英映射）。
 
+**数据时效**：每次使用本地化翻译时，检查 `output/cache/i18n.json` 的上次更新时间（通过 `cache-meta.js` 的 `.cache_meta.json`）。若超过 30 天未更新，提示用户："翻译数据已超过一个月未更新，是否有新船或新涂装需要同步？"（`node -e \"require('./src/i18n').setup('.')\"`）。用户拒绝则继续使用现有翻译。
+
 **交互流程**（由 LLM 进行模糊匹配和消歧）：
 
 1. **代码精确匹配** — `matchShip(name, catalog, i18n)` 查 `cnToEn` 映射 + `ships` 的 full/short 名称。
@@ -66,6 +68,8 @@ node -e "require('./src/i18n').setup('.')"   # 下载+解析
 
 > 代码仅负责精确映射。模糊匹配由 LLM 判断。匹配成功后自动缓存供后续使用。
 
+**自动获取 i18n 缓存**：CCU 分析或商店浏览中，用户使用中文等非英文船名且 `matchShip()` 匹配失败、同时 `output/cache/i18n.json` 不存在时，立即执行 `node -e "require('./src/i18n').setup('.')"` 下载翻译数据，**不要询问用户**。下载完成后重新尝试匹配。
+
 ### 扩展其他语言
 
 在 `src/i18n.js` 中添加新的语言解析器，在 `output/` 下存放对应缓存文件。
@@ -73,7 +77,7 @@ node -e "require('./src/i18n').setup('.')"   # 下载+解析
 
 ## 登录 / Login
 
-检查 `user_data/` 是否存在。若缺失或用户要求重新登录：
+检查 `user_data/` 是否存在。若缺失：
 
 ```bash
 cd D:/WindowsFiles/Users/Stainless_Kettle/Desktop/1
@@ -84,25 +88,37 @@ npm run login
 - 自动检测 URL 离开 `/sign-in` 视为登录成功
 - **会话过期检测**：爬取前访问机库页面，若标题为 "Access denied" 或无物品数据，提示重新登录
 
+> **自动登录**：`user_data/` 缺失时，告知用户"需要登录 RSI 账号"并立即执行 `npm run login`，**不要询问用户是否登录**。
+
 ## 爬取数据 / Scrape
 
-登录后获取最新数据。如用户未要求调试则**使用无头模式**。
+如用户未要求调试则**使用无头模式**。
 
 ```bash
-npm run scrape:headless         # 机库物品 + CCU 预计算
+npm run scrape:headless         # 机库物品
 npm run scrape:ships:headless   # 船只目录
 ```
 
 输出文件：
 - `output/hangar_items.json` — 机库物品
-- `output/hangar_items.json` — 机库物品
 - `output/cache/ships.json` — 船只商店价格缓存
 - `output/cache/i18n.json` — 翻译缓存
 - `output/cache/historical_ccus.json` — 历史 CCU 缓存
 - `output/cache/.cache_meta.json` — 缓存元数据（更新时间戳）
-- `output/ccu_analysis.json` — CCU 预计算
 
 > 数据已存在时自动跳过。使用 `--force` 强制刷新。
+
+### 启动时自动检查 / Startup Auto-Check
+
+**Skill 触发时，必须检查以下三项核心数据，任意缺失则告知用户并立即获取，不得询问：**
+
+| 检查项 | 路径 | 缺失时操作 |
+|--------|------|-----------|
+| 登录会话 | `user_data/` | `npm run login`（需用户交互输入账号密码） |
+| 机库数据 | `output/hangar_items.json` | `npm run scrape:headless` |
+| 船只目录 | `output/cache/ships.json` | `npm run scrape:ships:headless` |
+
+> 三项均存在后才进入正常交互流程。若 `user_data/` 存在但会话过期（爬取时报 "Access denied"），提示用户重新登录。
 
 ## 数据模式 / Data Schemas
 
