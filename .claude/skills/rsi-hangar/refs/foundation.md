@@ -35,6 +35,35 @@
 
 工作目录：所有命令在项目根目录运行。
 
+## 本地化 / Localization
+
+支持多语言船名/物品名查询。当前已实现中文，预留其他语言扩展。
+
+### 中文 / Chinese
+
+数据来源：https://ini.42kit.com/full/global.ini
+
+```bash
+node -e "require('./src/i18n').setup('.')"   # 下载+解析
+```
+
+导出 `output/i18n.json`（335 船 + 960 涂装 + 1717 中→英映射）。
+
+**交互流程**（由 LLM 进行模糊匹配和消歧）：
+
+1. **代码精确匹配** — `matchShip(name, catalog, i18n)` 查 `cnToEn` 映射 + `ships` 的 full/short 名称。
+2. **LLM 模糊匹配** — 代码未命中时 LLM 根据 i18n 数据消歧。
+3. **匹配后写入缓存** — `addTranslation(root, cnName, enName)` 保存到 `i18n.json`。
+4. **缓存缺失** — 自动 `setup('.')` 下载。
+5. **仍不确定** — 列出候选询问用户。
+
+> 代码仅负责精确映射。模糊匹配由 LLM 判断。匹配成功后自动缓存供后续使用。
+
+### 扩展其他语言
+
+在 `src/i18n.js` 中添加新的语言解析器，在 `output/` 下存放对应缓存文件。
+接口需导出：`setup(root)`, `translate(i18n, name)`, `fromLang(i18n, name)`, `addTranslation(root, langName, enName)`。
+
 ## 登录 / Login
 
 检查 `user_data/` 是否存在。若缺失或用户要求重新登录：

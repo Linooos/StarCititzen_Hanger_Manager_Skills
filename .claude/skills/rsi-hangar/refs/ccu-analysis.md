@@ -45,7 +45,9 @@
 
 > ⚠️ 此为模拟计算，不会实际部署升级包。你需要手动在机库中应用每个 CCU。
 
-### Step 5 — 计算并输出
+### Step 5 — 计算并输出（一行命令，禁止手工推算）
+
+**必须使用 `findBestChain()` 单次调用**，禁止逐链手工分析。代码算法优于人工推算。
 
 ```js
 const { findBestChain, formatResults } = require("./src/ccu");

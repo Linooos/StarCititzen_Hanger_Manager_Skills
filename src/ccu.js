@@ -31,8 +31,15 @@ const ALIASES = {
   "fury mx":"Fury-MX","freelancer dur":"Freelancer-DUR","freelancer max":"Freelancer-MAX","freelancer mis":"Freelancer-MIS",
 };
 function normalize(n) { return n.toLowerCase().replace(/[-]/g," ").replace(/\s+/g," ").replace(/^(upgrade\s*-\s*)/i,"").replace(/\s*(standard|warbond)\s*edition\s*$/i,"").trim(); }
-function matchShip(name, catalog) {
+function matchShip(name, catalog, i18n) {
   if (!name) return null;
+  // 中文名反查 / Chinese name lookup
+  if (i18n && i18n.cnToEn && i18n.cnToEn[name]) name = i18n.cnToEn[name];
+  if (i18n && i18n.ships) {
+    for (const [en, cn] of Object.entries(i18n.ships)) {
+      if (cn.short === name || cn.full === name) { name = en; break; }
+    }
+  }
   const key = name.toLowerCase().trim();
   if (ALIASES[key]) { const m = catalog.find(s => s.name === ALIASES[key]); if (m) return m; }
   let m = catalog.find(s => s.name === name); if (m) return m;
@@ -56,6 +63,7 @@ function loadCatalog(root) { return JSON.parse(fs.readFileSync(path.join(root,"o
 function loadAnalysis(root) { const p = path.join(root,"output","ccu_analysis.json"); return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p,"utf-8")) : null; }
 function loadCustomCCUs(root) { const p = path.join(root,"output","custom_ccus.json"); return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p,"utf-8")) : []; }
 function saveCustomCCUs(root, data) { fs.writeFileSync(path.join(root,"output","custom_ccus.json"), JSON.stringify(data, null, 2)); }
+function loadI18n(root) { const p = path.join(root,"output","i18n.json"); return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p,"utf-8")) : { ships:{}, cnToEn:{} }; }
 
 // 第一步：升级包分析 / Step 1: Upgrade Analysis
 function analyzeUpgrades(root) {
@@ -154,9 +162,9 @@ function precompute(root) {
 function findBestChain(opts={}) {
   const {seedShip,targetShip,projectRoot:root=".",excludeIds=[]}=opts;
   const exSet=new Set(excludeIds);
-  const catalog=loadCatalog(root),analysis=loadAnalysis(root);
+  const catalog=loadCatalog(root),analysis=loadAnalysis(root),i18n=loadI18n(root);
   if(!analysis) return {error:"No analysis. Run precompute() first."};
-  const target=matchShip(targetShip,catalog);
+  const target=matchShip(targetShip,catalog,i18n);
   if(!target) return {error:`Target "${targetShip}" not found`};
   const tp=target.price;
   const hangar=loadHangar(root);
@@ -165,7 +173,15 @@ function findBestChain(opts={}) {
   if(seedShip){const s=seeds.find(x=>x.actualShip===seedShip||x.name.includes(seedShip)||x.id===seedShip);
     if(s){let a=s.actualShip;if(!a){const cm=(s.contains||"").match(/Contains:\s*(.+?)\s+and\s+\d+\s+items?/);if(cm)a=cm[1];}if(!a)a=s.name.split(/[\n-]/).pop().trim();
       const sp=_shipPrice(a,catalog);seed={id:s.id,label:s.name.trim().split("\n")[0],actualShip:a,meltValue:s.meltValue,storePrice:sp,insurance:s.insurance||[]};}}
-  if(!seed) return {error:`Seed "${seedShip}" not found`};
+  if(!seed){
+    // 虚拟种子：用户说"无视种子"或船不在机库中 / Virtual seed
+    const sm = matchShip(seedShip, catalog, i18n);
+    if (sm) {
+      seed = { id: "virtual", label: sm.name, actualShip: sm.name, meltValue: sm.price, storePrice: sm.price, insurance: [], virtual: true };
+    } else {
+      return {error: `Seed "${seedShip}" not found in hangar or catalog`};
+    }
+  }
   if(seed.storePrice>=tp) return {error:"Seed price >= target price"};
 
   function assemble(rankedChains){
@@ -176,8 +192,9 @@ function findBestChain(opts={}) {
       const cands=[];
       for(let ci=0;ci<rankedChains.length;ci++){if(usedSet.has(ci))continue;
         const ch=rankedChains[ci].steps;let si=-1,siVal=Infinity;
-        for(let i=0;i<ch.length;i++){if(ch[i].fromValue>curPrice&&ch[i].fromValue<tp&&ch[i].fromValue<siVal){si=i;siVal=ch[i].fromValue;}}
+        for(let i=0;i<ch.length;i++){if(ch[i].fromValue>=curPrice&&ch[i].fromValue<tp&&ch[i].fromValue<siVal){si=i;siVal=ch[i].fromValue;}}
         if(si<0)continue;
+        if(ch[si].fromValue===curPrice&&ch[si].fromShip!==curShip) continue; // 禁同价换船
         // Generate key partial suffixes + full suffix
         const full=ch.slice(si);let cs2=full[0].fromValue,ce=full[full.length-1].toValue;
         if(ce>tp){let ti=full.findIndex(x=>x.toValue>tp);if(ti<0)ti=full.length;full.length=ti;if(full.length===0)continue;ce=full[full.length-1].toValue;}
@@ -233,12 +250,25 @@ function _shipPrice(n,c){const m=matchShip(n,c);return m?m.price:0;}
 function _makeChain(seed,a){return{seed,steps:a.steps,totalMelt:a.totalMelt,finalValue:a.finalValue,savings:a.savings,efficiency:a.efficiency,hasGaps:a.hasGaps,ownedCost:a.ownedCost,gapCost:a.gapCost};}
 
 // 第一步：升级包分析 / Step 1: Upgrade Analysis1
-function formatChainTable(chain){
+function formatChainTable(chain, i18n){
   const{seed,steps,totalMelt,finalValue,savings,efficiency,hasGaps,ownedCost,gapCost}=chain;const l=[];
-  l.push("",`**Seed Ship**: ${seed.actualShip} (${seed.label})`,`  Melt: $${seed.meltValue} | Insurance: ${seed.insurance.join(", ")}`,"");
+  // 本地化船名 / Translate ship names (try multiple variants)
+  const cn = (name) => {
+    if (!i18n || !i18n.ships) return name;
+    // Try exact, then space-variant, then hyphen-variant
+    const candidates = [name, name.replace(/-/g, " "), name.replace(/ /g, "-")];
+    for (const c of candidates) {
+      const entry = i18n.ships[c];
+      if (entry) return entry.short || entry.full || name;
+    }
+    return name;
+  };
+  const seedTag = seed.virtual ? " [虚拟/需购买]" : "";
+  const seedName = cn(seed.actualShip);
+  l.push("",`**Seed Ship**: ${seedName} (${seed.label})${seedTag}`,`  Melt: $${seed.meltValue} | Insurance: ${seed.insurance.join(", ") || "无"}`, "");
   l.push("| # | From | To | From Value | To Value | CCU Cost | Source | Note |","|---|------|----|-----------|---------|----------|--------|------|");
-  if(steps.length===0) l.push(`| - | ${seed.actualShip} | *(at target)* | - | $${finalValue} | - | - | - |`);
-  else steps.forEach((s,i)=>{const src=s.owned?(s.ccuid.startsWith("custom_")?"自定义":`#${s.ccuid}`):"—";let note=s.gap?"⚠️ 无升级":"";if(!s.gap){note=(s.isWarbond?"Warbond":"")+(s.ccuid?.startsWith("custom_")?(s.isWarbond?" (自定义)":"(自定义)"):"");}l.push(`| ${i+1} | ${s.from} | ${s.to} | $${s.fromPrice} | $${s.toPrice} | $${s.cost} | ${src} | ${note} |`);});
+  if(steps.length===0) l.push(`| - | ${seedName} | *(at target)* | - | $${finalValue} | - | - | - |`);
+  else steps.forEach((s,i)=>{const src=s.owned?(s.ccuid.startsWith("custom_")?"自定义":`#${s.ccuid}`):"—";let note=s.gap?"⚠️ 无升级":"";if(!s.gap){note=(s.isWarbond?"Warbond":"")+(s.ccuid?.startsWith("custom_")?(s.isWarbond?" (自定义)":"(自定义)"):"");}l.push(`| ${i+1} | ${cn(s.from)} | ${cn(s.to)} | $${s.fromPrice} | $${s.toPrice} | $${s.cost} | ${src} | ${note} |`);});
   const tc=steps.reduce((s,e)=>s+e.cost,0);l.push(`| | **TOTALS** | | | **$${finalValue}** | **$${tc}** | | |`,"");
   l.push(`- **种子船熔解价值**: $${seed.meltValue}`,`- **自有 CCU 实际成本**: $${ownedCost??tc}`);
   if(hasGaps||gapCost>0) l.push(`- **断层需购买成本**: $${gapCost||0}`);
@@ -246,16 +276,17 @@ function formatChainTable(chain){
   if(hasGaps) l.push(`\n> ⚠️ 含断层 — 标"无升级"的行需从商店原价购买。`);
   return l.join("\n");
 }
-function formatResults(result){
+function formatResults(result, i18n){
   if(result.error) return `Error: ${result.error}`;
   if(result.chain.totalMelt>1e8) return `## No valid path to **${result.target}**\n\nYour available CCUs cannot reach this ship without illegal same-price side-grades.`;
   const l=[];
-  l.push(`## CCU Chain: ${result.seed.actualShip} → **${result.target}** ($${result.targetPrice})`);
+  const cn = i18n?.ships ? (name) => { for (const c of [name, name.replace(/-/g," "), name.replace(/ /g,"-")]) { const e = i18n.ships[c]; if (e) return e.short||e.full||name; } return name; } : (n) => n;
+  l.push(`## CCU Chain: ${cn(result.seed.actualShip)} → **${cn(result.target)}** ($${result.targetPrice})`);
   l.push(`_${result.analysisInfo.upgradeCount} upgrades, ${result.analysisInfo.chainCount} chains, ${result.analysisInfo.isolatedCount} isolated_`,"");
   l.push(`### Best — $${result.chain.totalMelt} (${result.chain.efficiency}x)`);
-  l.push(formatChainTable(result.chain));
-  if(result.alternatives?.length){l.push("### Alternatives");result.alternatives.forEach((a,i)=>{l.push(`<details><summary>Alt ${i+1}: $${a.totalMelt} (${a.efficiency}x)</summary>\n`);l.push(formatChainTable(a));l.push("</details>\n");});}
+  l.push(formatChainTable(result.chain, i18n));
+  if(result.alternatives?.length){l.push("### Alternatives");result.alternatives.forEach((a,i)=>{l.push(`<details><summary>Alt ${i+1}: $${a.totalMelt} (${a.efficiency}x)</summary>\n`);l.push(formatChainTable(a, i18n));l.push("</details>\n");});}
   return l.join("\n");
 }
 
-module.exports={setWeights,normalize,matchShip,ALIASES,analyzeUpgrades,buildLocalChains,precompute,findBestChain,formatChainTable,formatResults,loadCustomCCUs,saveCustomCCUs};
+module.exports={setWeights,normalize,matchShip,ALIASES,analyzeUpgrades,buildLocalChains,precompute,findBestChain,formatChainTable,formatResults,loadCustomCCUs,saveCustomCCUs,loadI18n};
