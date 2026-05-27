@@ -71,6 +71,32 @@ console.log(formatResults(r));
 - Note：Warbond 填 `Warbond`，断层填 `⚠️ 无升级`
 - 底部统计：种子熔解、自有 CCU 成本、断层成本、总实际成本、节省
 
+### 自定义 CCU / Custom CCU
+
+当用户想使用机库中不存在的 CCU 时：
+
+1. 询问：起始船、目标船、实际价值（或节省多少）、是否 Warbond
+2. 写入 `output/custom_ccus.json`
+3. 重新运行 `precompute('.')`
+4. 重新生成链条
+
+```js
+const { saveCustomCCUs, precompute, findBestChain } = require("./src/ccu");
+saveCustomCCUs(".", [{ fromShip: "Paladin", toShip: "Carrack", actualCost: 10, isWarbond: true }]);
+precompute(".");
+findBestChain({ seedShip: "UTV", targetShip: "Carrack", projectRoot: "." });
+```
+
+自定义 CCU 在表格中标注 `(自定义)` 尾缀：
+- 普通：`(自定义)`
+- Warbond：`Warbond (自定义)`
+
+查看/清除：
+```bash
+cat output/custom_ccus.json   # 查看
+echo '[]' > output/custom_ccus.json  # 清除
+```
+
 ## 规则
 
 - **严禁同价侧级过渡**：CCU 只能从低价升级到高价，禁止 $0 差价

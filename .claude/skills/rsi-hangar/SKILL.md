@@ -1,10 +1,13 @@
 ---
 name: rsi-hangar
 description: >
-  Star Citizen RSI hangar manager — login, scrape pledged items & ship catalog,
-  analyze CCU upgrade chains. Use when the user mentions Star Citizen, RSI,
-  星际公民, hangar, 机库, CCU, ship upgrades, pledged items, or wants to
-  scrape/analyze their RSI account data.
+  Star Citizen RSI hangar manager. Use this skill whenever the user mentions
+  Star Citizen, RSI, 星际公民, hangar, 机库, CCU, ship upgrades, Perseus,
+  Polaris, Carrack, or any specific Star Citizen ship name, or wants to manage
+  their RSI account, find upgrade paths, compute CCU chains, browse the pledge
+  store, or scrape their hangar. Handles login, automated scraping, ship catalog,
+  CCU chain optimization, and store browsing. Even casual mentions of Star Citizen
+  ships or upgrades should trigger this skill.
 ---
 
 # RSI Hangar Manager / 星际公民机库管家
@@ -17,7 +20,7 @@ description: >
 
 | 关键词 | 读取文件 | 内容 |
 |--------|---------|------|
-| CCU、升级链、省钱、链条、目标船 | `refs/ccu-analysis.md` | CCU 链条分析交互流程 |
+| CCU、升级链、省钱、链条、目标船、自定义CCU、添加升级包 | `refs/ccu-analysis.md` | CCU 链条分析 + 自定义 CCU |
 | 商店、在售、皮肤、paint、gear、pledge store、升级包 | `refs/store-browser.md` | 网页商店浏览 |
 | 验证、检查数据、数据完整 | `refs/validate.md` | 数据质量检查 |
 | 清除、删除数据、隐私、重置 | `refs/clear-data.md` | 清除缓存和个人信息 |

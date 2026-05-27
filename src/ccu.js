@@ -54,6 +54,8 @@ function matchShip(name, catalog) {
 function loadHangar(root) { return JSON.parse(fs.readFileSync(path.join(root,"output","hangar_items.json"),"utf-8")); }
 function loadCatalog(root) { return JSON.parse(fs.readFileSync(path.join(root,"output","ships.json"),"utf-8")); }
 function loadAnalysis(root) { const p = path.join(root,"output","ccu_analysis.json"); return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p,"utf-8")) : null; }
+function loadCustomCCUs(root) { const p = path.join(root,"output","custom_ccus.json"); return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p,"utf-8")) : []; }
+function saveCustomCCUs(root, data) { fs.writeFileSync(path.join(root,"output","custom_ccus.json"), JSON.stringify(data, null, 2)); }
 
 // 第一步：升级包分析 / Step 1: Upgrade Analysis
 function analyzeUpgrades(root) {
@@ -67,6 +69,16 @@ function analyzeUpgrades(root) {
     if (pd <= 0) return;
     const ac = u.meltValue, sv = pd - ac, sp = pd > 0 ? sv/pd : 0;
     result.push({ id:u.id, name:u.name, fromShip:fm?fm.name:u.fromShip, toShip:tm?tm.name:u.toShip, fromValue:fv, toValue:tv, priceDiff:pd, actualCost:ac, savings:sv, savingsPercent:sp, isWarbond:u.isWarbond });
+  });
+  // 自定义 CCU / Custom CCUs
+  const custom = loadCustomCCUs(root);
+  custom.forEach((c, i) => {
+    if (!c.fromShip || !c.toShip) return;
+    const fm = matchShip(c.fromShip, catalog), tm = matchShip(c.toShip, catalog);
+    const fv = fm ? fm.price : (pm[c.fromShip]||0), tv = tm ? tm.price : (pm[c.toShip]||0), pd = tv - fv;
+    if (pd <= 0) return;
+    const ac = c.actualCost || 0, sv = pd - ac, sp = pd > 0 ? sv/pd : 0;
+    result.push({ id: "custom_"+i, name: `Custom: ${fm?fm.name:c.fromShip}→${tm?tm.name:c.toShip}`, fromShip: fm?fm.name:c.fromShip, toShip: tm?tm.name:c.toShip, fromValue:fv, toValue:tv, priceDiff:pd, actualCost:ac, savings:sv, savingsPercent:sp, isWarbond: c.isWarbond || false, addedBy: "custom" });
   });
   result.sort((a,b) => b.savingsPercent - a.savingsPercent);
   return result;
@@ -226,7 +238,7 @@ function formatChainTable(chain){
   l.push("",`**Seed Ship**: ${seed.actualShip} (${seed.label})`,`  Melt: $${seed.meltValue} | Insurance: ${seed.insurance.join(", ")}`,"");
   l.push("| # | From | To | From Value | To Value | CCU Cost | Source | Note |","|---|------|----|-----------|---------|----------|--------|------|");
   if(steps.length===0) l.push(`| - | ${seed.actualShip} | *(at target)* | - | $${finalValue} | - | - | - |`);
-  else steps.forEach((s,i)=>{const src=s.owned?`#${s.ccuid}`:"—",note=s.gap?"⚠️ 无升级":(s.isWarbond?"Warbond":"");l.push(`| ${i+1} | ${s.from} | ${s.to} | $${s.fromPrice} | $${s.toPrice} | $${s.cost} | ${src} | ${note} |`);});
+  else steps.forEach((s,i)=>{const src=s.owned?(s.ccuid.startsWith("custom_")?"自定义":`#${s.ccuid}`):"—";let note=s.gap?"⚠️ 无升级":"";if(!s.gap){note=(s.isWarbond?"Warbond":"")+(s.ccuid?.startsWith("custom_")?(s.isWarbond?" (自定义)":"(自定义)"):"");}l.push(`| ${i+1} | ${s.from} | ${s.to} | $${s.fromPrice} | $${s.toPrice} | $${s.cost} | ${src} | ${note} |`);});
   const tc=steps.reduce((s,e)=>s+e.cost,0);l.push(`| | **TOTALS** | | | **$${finalValue}** | **$${tc}** | | |`,"");
   l.push(`- **种子船熔解价值**: $${seed.meltValue}`,`- **自有 CCU 实际成本**: $${ownedCost??tc}`);
   if(hasGaps||gapCost>0) l.push(`- **断层需购买成本**: $${gapCost||0}`);
@@ -246,4 +258,4 @@ function formatResults(result){
   return l.join("\n");
 }
 
-module.exports={setWeights,normalize,matchShip,ALIASES,analyzeUpgrades,buildLocalChains,precompute,findBestChain,formatChainTable,formatResults};
+module.exports={setWeights,normalize,matchShip,ALIASES,analyzeUpgrades,buildLocalChains,precompute,findBestChain,formatChainTable,formatResults,loadCustomCCUs,saveCustomCCUs};
