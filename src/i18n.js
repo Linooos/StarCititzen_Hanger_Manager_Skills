@@ -138,4 +138,4 @@ async function setup(root) {
   return data;
 }
 
-module.exports = { setup, parse, exportCompact, translate, fromChinese, download, MFG_MAP };
+module.exports = { setup, parse, exportCompact, translate, fromChinese, download, addTranslation, MFG_MAP };

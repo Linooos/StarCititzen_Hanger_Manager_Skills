@@ -202,4 +202,5 @@ function formatResults(result, i18n) {
   return l.join("\n");
 }
 
-module.exports = { setWeights, normalize, matchShip, ALIASES, findBestChain, formatChainTable, formatResults, loadCustomCCUs, saveCustomCCUs };
+const { addTranslation } = require("./i18n");
+module.exports = { setWeights, normalize, matchShip, ALIASES, findBestChain, formatChainTable, formatResults, loadCustomCCUs, saveCustomCCUs, addTranslation };
