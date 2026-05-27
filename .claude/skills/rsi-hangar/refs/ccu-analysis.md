@@ -1,15 +1,17 @@
 # CCU 升级链分析 / CCU Chain Analysis
 
-> 依赖 `output/hangar_items.json` + `output/ships.json` + `output/ccu_analysis.json`
+> 依赖 `output/hangar_items.json` + `output/ships.json`
 
-当用户提及"CCU"、"升级链"、"省钱路径"或指定目标船时执行。
+## 算法 / Algorithm
+
+Dijkstra 在完整价格图上运行，全局最优，O(E log V)，~25ms 完成。
+禁止同价侧级过渡（$0 gap）。
 
 ## 交互流程
 
 ### Step 1 — 确认种子船
 
-加载 `output/hangar_items.json`，筛选 `Standalone Ships` + `Game Packages`。
-列出所有可用种子船，标注 LTI ⭐：
+加载 `output/hangar_items.json`，筛选 `Standalone Ships` + `Game Packages`，列出选项。
 
 ```
 可用种子船：
@@ -18,14 +20,12 @@
   ...
 请选择起始种子船（编号/船名）：
 ```
-
 - ⭐ 标记 LTI 永久保险种子，优先推荐
 - Game Packages 同样可作为种子
 - 模糊输入时尝试匹配
-
 ### Step 2 — 确认目标船
 
-在 `output/ships.json` 中查找。若存在多个变体，列出供选择并标注价格：
+查 `output/ships.json`，变体列出供选择，标注价格。
 
 ```
 "Constellation" 系列：
@@ -35,46 +35,25 @@
 请确认目标：
 ```
 
-### Step 3 — 排除 CCU（可选）
+### Step 3 — 免责声明
 
-询问是否排除特定 CCU ID（逗号分隔）。
+> ⚠️ 此为模拟计算，不会实际部署升级包。
 
-### Step 4 — 免责声明
-
-**输出前必须声明：**
-
-> ⚠️ 此为模拟计算，不会实际部署升级包。你需要手动在机库中应用每个 CCU。
-
-### Step 5 — 计算并输出（一行命令，禁止手工推算）
-
-**必须使用 `findBestChain()` 单次调用**，禁止逐链手工分析。代码算法优于人工推算。
-**必须加载 i18n 并传递给 `formatResults`** 以实现本地化船名显示。
+### Step 4 — 计算输出（一行命令）
 
 ```js
 const { findBestChain, formatResults } = require("./src/ccu");
 const i18n = require("./output/i18n.json");
 console.log(formatResults(findBestChain({
-  seedShip: "Aurora Mk II",
-  targetShip: "Carrack",
+  seedShip: "325a",
+  targetShip: "Perseus",
   projectRoot: ".",
   excludeIds: ["93520320"],   // 可选
-}), i18n));  // ← 必须传 i18n
+}), i18n));  // ← 必须传 i18n 实现本地化
 ```
 
-## 输出格式
 
-8 列表格：
-
-```
-| # | From | To | From Value | To Value | CCU Cost | Source | Note |
-|---|------|----|-----------|---------|----------|--------|------|
-```
-
-- Source：自有 CCU 填 `#ID`，断层填 `—`
-- Note：Warbond 填 `Warbond`，断层填 `⚠️ 无升级`
-- 底部统计：种子熔解、自有 CCU 成本、断层成本、总实际成本、节省
-
-### 自定义 CCU / Custom CCU
+### 自定义 CCU
 
 当用户想使用机库中不存在的 CCU 时：
 
@@ -82,25 +61,23 @@ console.log(formatResults(findBestChain({
 2. 写入 `output/custom_ccus.json`
 3. 重新运行 `precompute('.')`
 4. 重新生成链条
-
 ```js
-const { saveCustomCCUs, precompute, findBestChain } = require("./src/ccu");
+const { saveCustomCCUs, findBestChain } = require("./src/ccu");
 saveCustomCCUs(".", [{ fromShip: "Paladin", toShip: "Carrack", actualCost: 10, isWarbond: true }]);
-precompute(".");
-findBestChain({ seedShip: "UTV", targetShip: "Carrack", projectRoot: "." });
+// 表格标注：Source 列显示 "自定义"，Note 列 "Warbond (自定义)"
 ```
-
-自定义 CCU 在表格中标注 `(自定义)` 尾缀：
-- 普通：`(自定义)`
-- Warbond：`Warbond (自定义)`
-
 查看/清除：
+
 ```bash
 cat output/custom_ccus.json   # 查看
 echo '[]' > output/custom_ccus.json  # 清除
 ```
 
-## 规则
+## 输出格式
+
+8 列表格，Source 列自有 CCU 填 `#ID`/`自定义`，断层填 `—`。
+Note 列 Warbond/(自定义)/⚠️ 无升级。
+底部：种子熔解、自有 CCU 成本、断层成本、总实际成本、节省。
 
 - **严禁同价侧级过渡**：CCU 只能从低价升级到高价，禁止 $0 差价
 - 无合法路径时显示 "No valid path"
