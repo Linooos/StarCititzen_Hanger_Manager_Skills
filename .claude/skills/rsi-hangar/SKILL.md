@@ -18,6 +18,7 @@ description: >
 | 关键词 | 读取文件 | 内容 |
 |--------|---------|------|
 | CCU、升级链、省钱、链条、目标船 | `refs/ccu-analysis.md` | CCU 链条分析交互流程 |
+| 商店、在售、皮肤、paint、gear、pledge store、升级包 | `refs/store-browser.md` | 网页商店浏览 |
 | 验证、检查数据、数据完整 | `refs/validate.md` | 数据质量检查 |
 | 清除、删除数据、隐私、重置 | `refs/clear-data.md` | 清除缓存和个人信息 |
 

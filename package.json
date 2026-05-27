@@ -9,6 +9,8 @@
     "scrape:headless": "node src/scrape.js --headless",
     "scrape:ships": "node src/scrape-ships.js",
     "scrape:ships:headless": "node src/scrape-ships.js --headless",
+    "scrape:store": "node src/scrape-store.js",
+    "scrape:store:headless": "node src/scrape-store.js --headless",
     "validate": "node src/validate.js"
   },
   "dependencies": {
