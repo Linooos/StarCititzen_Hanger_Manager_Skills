@@ -335,102 +335,75 @@ function _shipPrice(n, c, i18n) { const m = matchShip(n, c, i18n); return m ? m.
 // ===========================================================================
 // 递归缝隙分解 / Recursive gap decomposition
 // ===========================================================================
-/** 时间一致性后处理：对每条历史边，用同日价格重建路径，取更优者 */
+/** 时间一致性后处理：对链中每个历史边的日期，用同日价格重建全图重算，取更优者 */
 function _enforceTemporalConsistency(steps, priceMap, catalog, histCCUs, ownedEdges, excludedPairs, histPriceMap, seed) {
-  // 收集链中所有历史边的日期
   const dates = new Set();
-  for (const s of steps) {
-    if (s.historical && s.historicalInfo?.date) dates.add(s.historicalInfo.date);
-  }
+  for (const s of steps) { if (s.historical && s.historicalInfo?.date) dates.add(s.historicalInfo.date); }
   if (!dates.size) return steps;
 
   let bestSteps = steps, bestCost = steps.reduce((s, e) => s + e.cost, 0);
-  const tried = new Set();
+  // 限制迭代次数，仅试最有影响力的日期（按出现次数排序）
+  const dateList = [...dates].sort((a, b) => {
+    const ca = steps.filter(s => s.historicalInfo?.date === a).length;
+    const cb = steps.filter(s => s.historicalInfo?.date === b).length;
+    return cb - ca;
+  }).slice(0, 5);
 
-  // 对每个日期，用同日价格重建价格表，局部重算
-  for (const d of dates) {
-    if (tried.has(d)) continue; tried.add(d);
-    // 构建该日期的价格映射
-    const dayPriceMap = {};
+  for (const d of dateList) {
+    // 构建该日期的全图价格映射
+    const dayPM = {};
     for (const s of catalog) {
       const ph = histPriceMap[s.name] || histPriceMap[s.name.toLowerCase().replace(/[-]/g," ").replace(/\s+/g," ").trim()];
       const hp = ph ? getPriceAtDate(ph, d) : null;
-      dayPriceMap[s.name] = hp != null ? hp : s.price;
+      dayPM[s.name] = hp != null ? hp : s.price;
     }
-    // 更新 ownedEdges 中涉及同日期的边成本
-    const adjEdges = {};
+    // 调整所有历史边：用同日 from-price 重新计算成本
+    const dayOE = {};
     for (const [ek, edge] of Object.entries(ownedEdges)) {
-      if (!edge.historical || edge.historicalInfo?.date !== d) { adjEdges[ek] = edge; continue; }
-      const [fromName, toName] = ek.split("→");
-      const fromDayPrice = dayPriceMap[fromName] || priceMap[fromName] || 0;
-      const newCost = edge.historicalInfo.wbValue - fromDayPrice;
-      if (newCost > 0 && newCost < edge.cost) { adjEdges[ek] = { ...edge, cost: newCost }; }
-      else { adjEdges[ek] = edge; }
+      if (!edge.historical) { dayOE[ek] = edge; continue; }
+      const [fn] = ek.split("→");
+      const dayFromP = dayPM[fn] || priceMap[fn] || 0;
+      const wbVal = edge.historicalInfo?.wbValue || 0;
+      const newCost = wbVal - dayFromP;
+      dayOE[ek] = { ...edge, cost: newCost > 0 ? newCost : edge.cost };
     }
-    // 局部 Dijkstra 重算后段
-    const newSteps = _rebuildFromDate(steps, d, priceMap, dayPriceMap, catalog, ownedEdges, adjEdges, seed, histCCUs, excludedPairs, histPriceMap);
-    if (!newSteps) continue;
-    const newCost = newSteps.reduce((s, e) => s + e.cost, 0);
-    if (newCost < bestCost) { bestCost = newCost; bestSteps = newSteps; }
-  }
-  return bestSteps;
-}
-
-function _rebuildFromDate(steps, refDate, priceMap, dayPriceMap, catalog, ownedEdges, adjEdges, seed, histCCUs, excludedPairs, histPriceMap) {
-  // 找到第一条使用该日期的历史边位置
-  let pivotIdx = -1;
-  for (let i = 0; i < steps.length; i++) {
-    if (steps[i].historical && steps[i].historicalInfo?.date === refDate) { pivotIdx = i; break; }
-  }
-  if (pivotIdx < 0) return null;
-
-  // 从此边开始，用同日价格重算后段
-  const pivotStep = steps[pivotIdx];
-  const fromNode = pivotStep.from;
-  const fromPrice = dayPriceMap[fromNode] || priceMap[fromNode] || 0;
-  const toNode = pivotStep.to;
-
-  // 构建子图：从 fromNode 到原目标的所有船
-  const shipList = catalog.filter(s => s.price > fromPrice).sort((a,b) => a.price - b.price);
-  const dist = {}, prev = {};
-  dist[fromNode] = 0;
-  const visited = new Set();
-
-  while (true) {
-    let cur = null, minD = Infinity;
-    for (const [s, d] of Object.entries(dist)) { if (!visited.has(s) && d < minD) { minD = d; cur = s; } }
-    if (!cur) break;
-    visited.add(cur);
-    const curPrice = dayPriceMap[cur] || priceMap[cur] || 0;
-    for (const s of shipList) {
-      if (s.price <= curPrice) continue;
-      const nb = s.name;
-      if (visited.has(nb)) continue;
-      if (s.price === curPrice && nb !== cur) continue;
-      const ek = cur + "→" + nb;
-      if (excludedPairs && excludedPairs.has(ek)) continue;
-      const owned = adjEdges[ek] || ownedEdges[ek];
-      const ec = owned ? owned.cost : (s.price - curPrice);
-      const nd = dist[cur] + ec;
-      if (nd < (dist[nb]||Infinity)) {
-        dist[nb] = nd;
-        prev[nb] = { from: cur, to: nb, fromPrice: curPrice, toPrice: s.price, cost: ec, owned: !!owned, ccuid: owned?.id||"", isWarbond: owned?.isWarbond||false, custom: owned?.custom||false, historical: owned?.historical||false, historicalInfo: owned?.historicalInfo||null };
+    // 全图 Dijkstra 用同日价格
+    const seedPrice = dayPM[seed.actualShip] || seed.storePrice;
+    const shipList = catalog.filter(s => s.price > seedPrice).sort((a,b) => a.price - b.price);
+    const dist = {}, prev = {};
+    dist[seed.actualShip] = 0;
+    const visited = new Set();
+    const targetName = steps[steps.length - 1].to;
+    while (true) {
+      let cur = null, minD = Infinity;
+      for (const [s, d] of Object.entries(dist)) { if (!visited.has(s) && d < minD) { minD = d; cur = s; } }
+      if (!cur || cur === targetName) break;
+      visited.add(cur);
+      const curPrice = dayPM[cur] || priceMap[cur] || 0;
+      for (const s of shipList) {
+        if (s.price <= curPrice) continue;
+        const nb = s.name;
+        if (visited.has(nb)) continue;
+        if (s.price === curPrice && nb !== cur) continue;
+        const ek = cur + "→" + nb;
+        if (excludedPairs && excludedPairs.has(ek)) continue;
+        const owned = dayOE[ek];
+        const ec = owned ? owned.cost : (s.price - curPrice);
+        const nd = dist[cur] + ec;
+        if (nd < (dist[nb]||Infinity)) {
+          dist[nb] = nd;
+          prev[nb] = { from: cur, to: nb, fromPrice: curPrice, toPrice: s.price, cost: ec, owned: !!owned, ccuid: owned?.id||"", isWarbond: owned?.isWarbond||false, custom: owned?.custom||false, historical: owned?.historical||false, historicalInfo: owned?.historicalInfo||null };
+        }
       }
     }
+    if (!prev[targetName]) continue;
+    let newSteps = []; let node = targetName;
+    while (prev[node]) { newSteps.unshift(prev[node]); node = prev[node].from; }
+    newSteps = mergeConsecutiveCredits(newSteps);
+    const nc = newSteps.reduce((s, e) => s + e.cost, 0);
+    if (nc < bestCost) { bestCost = nc; bestSteps = newSteps; }
   }
-
-  // 找后段终点：原链最后一步的 target
-  const lastNode = steps[steps.length - 1].to;
-  if (!prev[lastNode]) return null;
-
-  // 重建后段
-  const newTail = [];
-  let node = lastNode;
-  while (prev[node]) { newTail.unshift(prev[node]); node = prev[node].from; }
-
-  // 合并前后段
-  const result = [...steps.slice(0, pivotIdx), ...newTail];
-  return mergeConsecutiveCredits(result);
+  return bestSteps;
 }
 
 function mergeConsecutiveCredits(steps) {

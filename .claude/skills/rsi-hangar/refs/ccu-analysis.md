@@ -66,6 +66,13 @@
 
 > **注意**：此日期是 **CCU 事件的时间窗口起点**，而非缓存文件的过期时间。含义：从该日期到今天，在此期间 scorg.tools 记录过的 WB CCU 事件均可参与计算。例如用户说"3 年"→ 2023 年至今，则 2024-07-12 的 WB 事件在窗口内、会被纳入；2022 年的事件不在窗口内、被排除。该日期最终传给 `findBestChain({ useHistorical: "2023-05-28" })`。
 
+然后询问：
+
+> "是否开启**时间一致性校验 (TC)**？开启后会对链中每条历史边用同日价格重建全图重算，进一步优化路径。计算时间增加约 2-5 秒。"
+
+- 选择**是** → 传入 `temporalConsistency: true`
+- 选择**否**（默认）→ 不传
+
 然后检查 `output/cache/historical_ccus.json` 是否存在：
 
 ---
@@ -157,6 +164,7 @@ console.log(formatResults(findBestChain({
   projectRoot: ".",
   useHistorical: "2025-05-28",   // 全量/部分模式
   completeMode: true,            // 完全模式（与 useHistorical 二选一）
+  temporalConsistency: true,     // 时间一致性校验（可选，~2-5秒）
   excludeIds: ["93520320"],      // 可选
 }), i18n));  // ← 必须传 i18n，否则中文名不翻译
 ```
