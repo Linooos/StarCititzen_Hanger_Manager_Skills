@@ -120,6 +120,16 @@ npm run scrape:ships:headless   # 船只目录
 
 > 三项均存在后才进入正常交互流程。若 `user_data/` 存在但会话过期（爬取时报 "Access denied"），提示用户重新登录。
 
+**重要：必须依次执行，不得并行**。所有抓取脚本共用 `user_data/`，并行会导致 Chrome 配置冲突。每个脚本完成后 `launchContext` 会等待 2 秒确保 Chrome 进程完全退出。执行顺序：
+
+```
+npm run login          # 1. 先登录（有头，用户交互）
+npm run scrape:headless       # 2. 再机库（无头）
+npm run scrape:ships:headless # 3. 最后船只目录（无头）
+```
+
+> 上一步完成后再启动下一步。不要同时运行多个抓取命令。
+
 ## 数据模式 / Data Schemas
 
 ### hangar_items.json — 机库物品

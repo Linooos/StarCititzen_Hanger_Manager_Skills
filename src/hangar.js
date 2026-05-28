@@ -77,7 +77,11 @@ async function launchContext(userDataDir, opts = {}) {
 
   return {
     context,
-    cleanup: () => context.close(),
+    cleanup: async () => {
+      await context.close();
+      // 等待 Chrome 进程完全退出释放 user_data 锁 / Wait for full exit
+      await sleep(2000);
+    },
   };
 }
 
