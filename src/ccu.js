@@ -201,11 +201,12 @@ function findBestChain(opts = {}) {
 
   // 历史 WB CCU 边：遍历所有 WB 事件，每个事件用当时的历史价格
   let histCCUs = {}, histPriceMap = {};
-  if (useHistorical) {
+  if (effectiveUseHistorical) {
     let dateFrom;
-    if (typeof useHistorical === "string") dateFrom = new Date(useHistorical);
+    if (typeof useHistorical === "string") { dateFrom = new Date(useHistorical); if (isNaN(dateFrom.getTime())) dateFrom = null; }
     else if (useHistorical instanceof Date) dateFrom = useHistorical;
-    else { dateFrom = new Date(); dateFrom.setFullYear(dateFrom.getFullYear() - 1); }
+    else if (useHistorical === true) { dateFrom = new Date(); dateFrom.setFullYear(dateFrom.getFullYear() - 1); }
+    else { dateFrom = null; } // 无日期过滤 = 全部历史
 
     histCCUs = loadHistoricalCCUs(root, dateFrom);
     const allWbEvents = loadAllWBEevents(root, dateFrom);
@@ -253,9 +254,11 @@ function findBestChain(opts = {}) {
       const priceHist = histPriceMap[ship.name] || histPriceMap[ship.name.toLowerCase().replace(/[-]/g," ").replace(/\s+/g," ").trim()];
       if (!priceHist || !priceHist.length) continue;
       // 取范围内最低价 + 起始日价格，取较小者（覆盖涨价前+范围内低谷）
-      const histPriceAtStart = dateFrom ? getPriceAtDate(priceHist, dateFrom.toISOString().substring(0,10)) : null;
+      const dateFromStr2 = (dateFrom && !isNaN(dateFrom.getTime())) ? dateFrom.toISOString().substring(0,10) : null;
+      const histPriceAtStart = dateFromStr2 ? getPriceAtDate(priceHist, dateFromStr2) : null;
       let minPrice = ship.price, minDate = null;
-      for (const p of priceHist) { if (p.price < minPrice && (!dateFrom || p.date >= dateFrom.toISOString().substring(0,10))) { minPrice = p.price; minDate = p.date; } }
+      const dateFromStr = (dateFrom && !isNaN(dateFrom.getTime())) ? dateFrom.toISOString().substring(0,10) : null;
+      for (const p of priceHist) { if (p.price < minPrice && (!dateFromStr || p.date >= dateFromStr)) { minPrice = p.price; minDate = p.date; } }
       if (histPriceAtStart != null && histPriceAtStart < minPrice) { minPrice = histPriceAtStart; minDate = dateFrom.toISOString().substring(0,10); }
       if (minPrice >= ship.price) continue;
       for (const fromShip of catalog) {
