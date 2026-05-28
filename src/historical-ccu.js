@@ -268,10 +268,10 @@ function parseShipData(shipId, rawName, pairs) {
         }
       }
 
-      const status = classifyStatus(valueText);
-      const price = extractPrice(valueText);
-
-      history.push({ date: dateStr, status, price, event });
+      const entries = parseValueText(valueText);
+      for (const entry of entries) {
+        history.push({ date: dateStr, status: entry.status, price: entry.price, event });
+      }
       i++; // skip the value we consumed
     }
   }
@@ -279,23 +279,31 @@ function parseShipData(shipId, rawName, pairs) {
   return { shipName, rawName, shipId, regularPrice, history };
 }
 
-function classifyStatus(text) {
-  if (/Warbond:\s*\$[\d,]+/.test(text) && !/ended/i.test(text)) return "Warbond";
-  if (/Warbond ended/i.test(text)) return "WarbondEnded";
-  if (/Available on sale/i.test(text) || /Initial value/i.test(text)) return "Available";
-  if (/No longer on sale/i.test(text)) return "NoLongerOnSale";
-  return "Unknown";
+/** Parse combined value text into one or more {status, price} entries. */
+function parseValueText(text) {
+  const entries = [];
+  // Price increased to $X
+  const pi = text.match(/Price increased to\s*\$([\d,]+)/i);
+  if (pi) entries.push({ status: "PriceIncrease", price: parseInt(pi[1].replace(/,/g, ""), 10) });
+  // Warbond: $X (not ended)
+  const wb = text.match(/Warbond:\s*\$([\d,]+)/i);
+  if (wb && !/Warbond ended/i.test(text)) entries.push({ status: "Warbond", price: parseInt(wb[1].replace(/,/g, ""), 10) });
+  // Available on sale: $X
+  const av = text.match(/Available on sale:\s*\$([\d,]+)/i);
+  if (av) entries.push({ status: "Available", price: parseInt(av[1].replace(/,/g, ""), 10) });
+  // Initial value: $X
+  const iv = text.match(/Initial value:\s*\$([\d,]+)/i);
+  if (iv) entries.push({ status: "Available", price: parseInt(iv[1].replace(/,/g, ""), 10) });
+  // Warbond ended
+  if (/Warbond ended/i.test(text)) entries.push({ status: "WarbondEnded", price: null });
+  // No longer on sale
+  if (/No longer on sale/i.test(text)) entries.push({ status: "NoLongerOnSale", price: null });
+  if (!entries.length) entries.push({ status: "Unknown", price: null });
+  return entries;
 }
 
-function extractPrice(text) {
-  const wm = text.match(/Warbond:\s*\$([\d,]+)/i);
-  if (wm) return parseInt(wm[1].replace(/,/g, ""), 10);
-  const am = text.match(/Available on sale:\s*\$([\d,]+)/i);
-  if (am) return parseInt(am[1].replace(/,/g, ""), 10);
-  const ivm = text.match(/Initial value:\s*\$([\d,]+)/i);
-  if (ivm) return parseInt(ivm[1].replace(/,/g, ""), 10);
-  return null;
-}
+function classifyStatus(text) { return parseValueText(text)[0]?.status || "Unknown"; }
+function extractPrice(text) { return parseValueText(text)[0]?.price || null; }
 
 function parseDate(dateStr) {
   const months = { Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",

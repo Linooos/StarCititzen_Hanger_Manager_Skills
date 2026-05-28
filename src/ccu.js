@@ -252,13 +252,17 @@ function findBestChain(opts = {}) {
       if (hasOwnedTo) continue;
       const priceHist = histPriceMap[ship.name] || histPriceMap[ship.name.toLowerCase().replace(/[-]/g," ").replace(/\s+/g," ").trim()];
       if (!priceHist || !priceHist.length) continue;
+      // 取范围内最低价 + 起始日价格，取较小者（覆盖涨价前+范围内低谷）
+      const histPriceAtStart = dateFrom ? getPriceAtDate(priceHist, dateFrom.toISOString().substring(0,10)) : null;
       let minPrice = ship.price, minDate = null;
       for (const p of priceHist) { if (p.price < minPrice && (!dateFrom || p.date >= dateFrom.toISOString().substring(0,10))) { minPrice = p.price; minDate = p.date; } }
+      if (histPriceAtStart != null && histPriceAtStart < minPrice) { minPrice = histPriceAtStart; minDate = dateFrom.toISOString().substring(0,10); }
       if (minPrice >= ship.price) continue;
       for (const fromShip of catalog) {
         if (fromShip.price >= minPrice || fromShip.name === ship.name) continue;
         const ek = fromShip.name + "→" + ship.name;
-        if (ownedEdges[ek]) continue;
+        // 允许涨价边覆盖更贵的已有边（如WB边因历史价格变贵）
+        if (ownedEdges[ek] && !ownedEdges[ek].historical) continue;
         if (minDate) { const deb = debutMap[fromShip.name] || debutMap[fromShip.name.toLowerCase().replace(/[-]/g," ").replace(/\s+/g," ").trim()]; if (deb && deb > minDate) continue; }
         const fromHist = histPriceMap[fromShip.name] || histPriceMap[fromShip.name.toLowerCase().replace(/[-]/g," ").replace(/\s+/g," ").trim()];
         const histFromP = minDate ? getPriceAtDate(fromHist, minDate) : null;
@@ -352,7 +356,8 @@ function decomposeGaps(steps, priceMap, catalog, histCCUs, ownedEdges, excludedP
   const result = [];
   for (const step of steps) {
     const isGap = !step.owned;
-    const isLargeHist = step.owned && step.historical && (step.toPrice - step.fromPrice) > 50;
+    const isPriceChange = step.historicalInfo?.event?.includes("涨价");
+    const isLargeHist = step.owned && step.historical && !isPriceChange && (step.toPrice - step.fromPrice) > 50;
     if (!isGap && !isLargeHist) { result.push(step); continue; }
     const decomposed = _decomposeOne(step.fromPrice, step.toPrice, priceMap, catalog, histCCUs, ownedEdges, excludedPairs, depth, histPriceMap);
     if (decomposed.length <= 1) { result.push(step); continue; }
@@ -435,8 +440,10 @@ function formatChainTable(chain, i18n) {
   else steps.forEach((s,i) => {
     let src, note;
     if (s.owned && s.historical) {
-      src = "历史WB"; note = "历史WB";
-      if (s.historicalInfo) note += ` ($${s.historicalInfo.wbValue}, ${s.historicalInfo.date||""})`;
+      const pc = s.historicalInfo?.event?.includes("涨价");
+      src = pc ? "涨价CCU" : "历史WB";
+      note = pc ? (s.historicalInfo?.event||"涨价CCU") : "历史WB";
+      if (s.historicalInfo && !pc) note += ` ($${s.historicalInfo.wbValue}, ${s.historicalInfo.date||""})`;
     } else if (s.owned && s.custom) {
       src = "自定义"; note = s.isWarbond ? "Warbond (自定义)" : "(自定义)";
     } else if (s.owned) {
