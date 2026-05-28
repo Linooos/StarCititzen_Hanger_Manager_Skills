@@ -154,9 +154,10 @@ function patchZeroPrices(catalog, root) {
 // 核心：Dijkstra + 所有 WB 事件 + 递归分解
 // ===========================================================================
 function findBestChain(opts = {}) {
-  const { seedShip, targetShip, projectRoot: root = ".", excludeIds = [], useHistorical } = opts;
+  const { seedShip, targetShip, projectRoot: root = ".", excludeIds = [], useHistorical, completeMode } = opts;
   const catalog = loadCatalog(root), i18n = loadI18n(root);
-  const hangar = loadHangar(root);
+  const effectiveUseHistorical = completeMode ? true : useHistorical;
+  const hangar = completeMode ? [] : loadHangar(root);
   const pricePatch = patchZeroPrices(catalog, root);
   const priceMap = buildPriceMap(catalog);
 
@@ -164,11 +165,11 @@ function findBestChain(opts = {}) {
   if (!target) return { error: `Target "${targetShip}" not found` };
   const tp = target.price;
 
-  const seeds = hangar.filter(i => i.category === "Standalone Ships" || i.category === "Game Packages");
+  const seeds = completeMode ? [] : hangar.filter(i => i.category === "Standalone Ships" || i.category === "Game Packages");
   let seed = null;
   const sm = matchShip(seedShip, catalog, i18n);
   if (seedShip) {
-    const s = seeds.find(x => x.actualShip === seedShip || x.name.includes(seedShip) || x.id === seedShip);
+    const s = !completeMode ? seeds.find(x => x.actualShip === seedShip || x.name.includes(seedShip) || x.id === seedShip) : null;
     if (s) {
       let a = s.actualShip; if (!a) { const cm = (s.contains||"").match(/Contains:\s*(.+?)\s+and\s+\d+\s+items?/); if (cm) a = cm[1]; } if (!a) a = s.name.split(/[\n-]/).pop().trim();
       seed = { id: s.id, label: s.name.trim().split("\n")[0], actualShip: a, meltValue: s.meltValue, storePrice: _shipPrice(a, catalog, i18n), insurance: s.insurance||[], virtual: false };
@@ -178,7 +179,7 @@ function findBestChain(opts = {}) {
   if (!seed) return { error: `Seed "${seedShip}" not found` };
   if (seed.storePrice >= tp) return { error: "Seed price >= target price" };
 
-  const excludedData = loadExcludedCCUs(root);
+  const excludedData = completeMode ? { pairs: new Set(), byIds: new Set() } : loadExcludedCCUs(root);
   const exclude = new Set([...excludeIds, ...excludedData.byIds]);
   const excludedPairs = excludedData.pairs;
 
@@ -190,7 +191,7 @@ function findBestChain(opts = {}) {
     const key = fm.name + "→" + tm.name;
     if (!ownedEdges[key] || u.meltValue < ownedEdges[key].cost) ownedEdges[key] = { cost: u.meltValue, id: u.id, isWarbond: u.isWarbond };
   });
-  (loadCustomCCUs(root)||[]).forEach(c => {
+  if (!completeMode) (loadCustomCCUs(root)||[]).forEach(c => {
     if (!c.fromShip || !c.toShip) return;
     const fm = matchShip(c.fromShip, catalog, i18n), tm = matchShip(c.toShip, catalog, i18n);
     if (!fm || !tm || tm.price <= fm.price) return;
@@ -243,6 +244,35 @@ function findBestChain(opts = {}) {
         }
       }
     }
+
+    // 涨价 CCU 边 / Price change edges
+    for (const ship of catalog) {
+      if (ship.price <= seed.storePrice) continue;
+      const hasOwnedTo = !completeMode && Object.keys(ownedEdges).some(k => k.endsWith("→"+ship.name) && !ownedEdges[k].historical);
+      if (hasOwnedTo) continue;
+      const priceHist = histPriceMap[ship.name] || histPriceMap[ship.name.toLowerCase().replace(/[-]/g," ").replace(/\s+/g," ").trim()];
+      if (!priceHist || !priceHist.length) continue;
+      let minPrice = ship.price, minDate = null;
+      for (const p of priceHist) { if (p.price < minPrice && (!dateFrom || p.date >= dateFrom.toISOString().substring(0,10))) { minPrice = p.price; minDate = p.date; } }
+      if (minPrice >= ship.price) continue;
+      for (const fromShip of catalog) {
+        if (fromShip.price >= minPrice || fromShip.name === ship.name) continue;
+        const ek = fromShip.name + "→" + ship.name;
+        if (ownedEdges[ek]) continue;
+        if (minDate) { const deb = debutMap[fromShip.name] || debutMap[fromShip.name.toLowerCase().replace(/[-]/g," ").replace(/\s+/g," ").trim()]; if (deb && deb > minDate) continue; }
+        const fromHist = histPriceMap[fromShip.name] || histPriceMap[fromShip.name.toLowerCase().replace(/[-]/g," ").replace(/\s+/g," ").trim()];
+        const histFromP = minDate ? getPriceAtDate(fromHist, minDate) : null;
+        const effFromP = histFromP != null ? histFromP : fromShip.price;
+        if (effFromP >= minPrice) continue;
+        const edgeCost = minPrice - effFromP;
+        const normalCost = ship.price - fromShip.price;
+        if (edgeCost >= normalCost) continue;
+        if (ownedEdges[ek] && !ownedEdges[ek].historical) continue;
+        if (!ownedEdges[ek] || edgeCost < ownedEdges[ek].cost)
+          ownedEdges[ek] = { cost: edgeCost, id: "price_"+ek.replace(/[^a-zA-Z0-9]/g,"_"), isWarbond: false, historical: true,
+            historicalInfo: { wbValue: minPrice, regularPrice: ship.price, date: minDate||"", event: "涨价CCU (历史最低$"+minPrice+")" } };
+      }
+    }
   }
 
   // Dijkstra
@@ -283,7 +313,7 @@ function findBestChain(opts = {}) {
   let steps = []; let node = target.name;
   while (prev[node]) { steps.unshift(prev[node]); node = prev[node].from; }
   steps = mergeConsecutiveCredits(steps);
-  if (useHistorical && Object.keys(histCCUs).length > 0) { steps = decomposeGaps(steps, priceMap, catalog, histCCUs, ownedEdges, excludedPairs, 3, histPriceMap); }
+  if (effectiveUseHistorical && Object.keys(histCCUs).length > 0) { steps = decomposeGaps(steps, priceMap, catalog, histCCUs, ownedEdges, excludedPairs, 3, histPriceMap); }
 
   const tccu = steps.reduce((s,e) => s + e.cost, 0), oc = steps.filter(e => e.owned).reduce((s,e) => s + e.cost, 0);
   const gc = steps.filter(e => !e.owned).reduce((s,e) => s + e.cost, 0), tm = seed.meltValue + tccu;
@@ -292,7 +322,7 @@ function findBestChain(opts = {}) {
 
   return { target: target.name, targetPrice: tp, seed,
     chain: { seed, steps, totalMelt: tm, finalValue: fv, savings: sv, efficiency: ef, hasGaps: hg, ownedCost: oc, gapCost: gc, hasHistorical },
-    analysisInfo: { ownedEdges: Object.keys(ownedEdges).length, shipCount: shipList.length, useHistorical: !!useHistorical, pricePatch } };
+    analysisInfo: { ownedEdges: Object.keys(ownedEdges).length, shipCount: shipList.length, useHistorical: !!effectiveUseHistorical, completeMode: !!completeMode, pricePatch } };
 }
 
 function _shipPrice(n, c, i18n) { const m = matchShip(n, c, i18n); return m ? m.price : 0; }
@@ -331,7 +361,7 @@ function decomposeGaps(steps, priceMap, catalog, histCCUs, ownedEdges, excludedP
     for (const seg of decomposed) {
       const ek = seg.from + "→" + seg.to;
       const owned = ownedEdges[ek];
-      result.push({ from: seg.from, to: seg.to, fromPrice: seg.fromPrice, toPrice: seg.toPrice, cost: seg.cost, owned: !!owned || seg.historical || false, ccuid: owned?.id || (seg.historical ? "hist_" + seg.from.replace(/[^a-zA-Z0-9]/g,"_") + "_" + seg.to.replace(/[^a-zA-Z0-9]/g,"_") : ""), isWarbond: owned?.isWarbond || seg.historical || false, custom: owned?.custom || false, historical: seg.historical || false, historicalInfo: seg.historicalInfo || null });
+      result.push({ from: seg.from, to: seg.to, fromPrice: seg.fromPrice, toPrice: seg.toPrice, cost: seg.cost, owned: !!owned || (seg.historical || (owned?.historical || false)), ccuid: owned?.id || ((seg.historical || (owned?.historical || false)) ? (seg.historical ? "hist_" : "price_") + seg.from.replace(/[^a-zA-Z0-9]/g,"_") + "_" + seg.to.replace(/[^a-zA-Z0-9]/g,"_") : ""), isWarbond: owned?.isWarbond || seg.historical || false, custom: owned?.custom || false, historical: seg.historical || (owned?.historical || false), historicalInfo: seg.historicalInfo || owned?.historicalInfo || null });
       prev = seg.to; prevPrice = seg.toPrice;
     }
   }

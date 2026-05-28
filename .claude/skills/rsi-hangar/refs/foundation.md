@@ -120,6 +120,12 @@ npm run scrape:ships:headless   # 船只目录
 
 > 三项均存在后才进入正常交互流程。若 `user_data/` 存在但会话过期（爬取时报 "Access denied"），提示用户重新登录。
 
+**完全模式快捷路径**：若 `user_data/` 和 `output/hangar_items.json` 均缺失，在开始获取前先用 AskUserQuestion 询问用户：
+
+> "检测到无登录会话和机库数据。是否使用**完全模式**（仅用历史 CCU 计算，不需登录）？需要船只目录缓存和历史 CCU 全量缓存。"
+> 1. **使用完全模式** — 跳过登录和机库抓取，仅需确保 `ships.json` + `historical_ccus.json` 存在
+> 2. **正常登录** — 依次执行 login → scrape → scrape:ships
+
 **重要：必须依次执行，不得并行**。所有抓取脚本共用 `user_data/`，并行会导致 Chrome 配置冲突。每个脚本完成后 `launchContext` 会等待 2 秒确保 Chrome 进程完全退出。执行顺序：
 
 ```
