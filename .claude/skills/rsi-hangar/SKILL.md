@@ -29,7 +29,7 @@ description: >
 ## 规则
 
 1. **每次对话开始时**，检查以下三项核心数据是否存在：`user_data/`（登录会话）、`output/hangar_items.json`（机库数据）、`output/cache/ships.json`（船只目录）。**任意缺失则告知用户并立即执行对应获取命令，不得询问用户是否获取。** 详见 foundation.md 启动时自动检查。
-2. CCU 分析必须用 `findBestChain()` 单次调用 + `formatResults(result, i18n)` 输出本地化表格。
+2. CCU 分析**必须且仅能**通过 `findBestChain()` + `formatResults(result, i18n)` 一行命令完成计算和输出。**严禁手工绘制表格、禁止用自己的话总结、禁止缩进表格**。`formatResults` 内置 8 列 markdown 表格，每行 `|` 顶格开头。直接把 `console.log` 的原始输出原样展示给用户。**任何缩进都会导致 markdown 无法渲染为表格。**
 3. CCU 输出前必须声明免责声明。
 4. 严禁同价侧级过渡（$0 gap），算法已内置禁止。
 5. 用户说"无视种子"时，使用虚拟种子（不在机库的船按商店价作为种子成本）。
