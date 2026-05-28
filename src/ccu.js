@@ -356,12 +356,16 @@ function decomposeGaps(steps, priceMap, catalog, histCCUs, ownedEdges, excludedP
   const result = [];
   for (const step of steps) {
     const isGap = !step.owned;
-    const isPriceChange = step.historicalInfo?.event?.includes("涨价");
-    const isLargeHist = step.owned && step.historical && !isPriceChange && (step.toPrice - step.fromPrice) > 50;
+    const isLargeHist = step.owned && step.historical && (step.toPrice - step.fromPrice) > 50;
     if (!isGap && !isLargeHist) { result.push(step); continue; }
     const decomposed = _decomposeOne(step.fromPrice, step.toPrice, priceMap, catalog, histCCUs, ownedEdges, excludedPairs, depth, histPriceMap);
     if (decomposed.length <= 1) { result.push(step); continue; }
     if (excludedPairs && decomposed.some(seg => excludedPairs.has(seg.from + "→" + seg.to))) { result.push(step); continue; }
+    // 涨价比原边贵则保留原边 / Keep original if decomposition increases cost
+    if (isLargeHist) {
+      const decomposedCost = decomposed.reduce((s, seg) => s + (seg.cost || 0), 0);
+      if (decomposedCost >= step.cost) { result.push(step); continue; }
+    }
     let prev = step.from, prevPrice = step.fromPrice;
     for (const seg of decomposed) {
       const ek = seg.from + "→" + seg.to;
