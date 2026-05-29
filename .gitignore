@@ -5,3 +5,6 @@ output/
 .env
 cookies.json
 local_storage.json
+
+# Claude Code local config
+.claude/
