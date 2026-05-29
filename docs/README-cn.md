@@ -121,6 +121,21 @@ node -e "const { findBestChain, formatResults } = require('./src/ccu'); const i1
 - **历史 CCU**：[scorg.tools/ccu](https://scorg.tools/ccu) — 931 个日期快照（2021-2026）
 - **汉化翻译**：[ini.42kit.com](https://ini.42kit.com/full/global.ini)
 
+## 开发计划 / TODO
+
+| 状态 | 功能 | 备注 |
+|------|------|------|
+| ✅ | 机库信息抓取 | 并发提取所有机库物品及升级链 |
+| ✅ | 船只价格目录 | 250 艘船，商店 + 矩阵双源 |
+| ✅ | CCU 链路分析 | Dijkstra + 4 种模式 + 递归缝隙分解 |
+| ✅ | 历史 CCU 数据 | scorg.tools 集成（WB + 涨价边） |
+| ✅ | 中文汉化 | 335 艘船 + 960 涂装，模糊匹配自动缓存 |
+| ⏳ | 商店功能 | 产品分类获取完成，待完成商店购买、项目查询 |
+| ❌ | 船只详情查询 | 规格、数据、对比 |
+| ❌ | 光谱论坛 | 帖子浏览、主题追踪 |
+| ❌ | 游戏活动查询 | 日程、活动追踪 |
+| ❌ | 游戏日程推测 | 发布窗口预测、路线图分析 |
+
 ## 许可
 
 GNU General Public License v3.0 — 详见 [LICENSE](../LICENSE)。

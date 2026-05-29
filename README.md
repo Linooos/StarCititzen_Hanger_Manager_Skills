@@ -56,6 +56,22 @@ node -e "const { findBestChain, formatResults } = require('./src/ccu'); const i1
 | Partial | ✓ | ✓ (gap ships only) | Yes |
 | Complete | ✗ | ✓ | **No** |
 
+## Roadmap / TODO
+
+| Status | Feature | Notes |
+|--------|---------|-------|
+| ✅ | Hangar scraping | Concurrent extraction of all pledge items |
+| ✅ | Ship catalog | 250 ships from matrix + store |
+| ✅ | CCU chain analysis | Dijkstra + 4 modes + recursive gap decomposition |
+| ✅ | Historical CCU | scorg.tools integration (WB + price increase edges) |
+| ✅ | Chinese localization | CN↔EN fuzzy matching with auto-cache |
+| ⏳ | Store browser | Product listing — scraping done, purchase pending |
+| ❌ | Store purchase | Buy CCUs / items directly |
+| ❌ | Ship detail lookup | Specs, stats, comparison |
+| ❌ | Spectrum forums | Post browsing, thread tracking |
+| ❌ | Game events | Schedule, event tracking |
+| ❌ | Event calendar | Release window prediction, roadmap estimation |
+
 ## License
 
 GNU General Public License v3.0 — see [LICENSE](LICENSE).
