@@ -1,5 +1,7 @@
 # RSI Hangar Manager / 星际公民机库管家
 
+[中文文档](docs/README-cn.md) | **English**
+
 Star Citizen RSI hangar management tool with CCU chain optimization. Automates login, hangar scraping, ship catalog browsing, and finds the most cost-effective Cross-Chassis Upgrade paths using Dijkstra's algorithm on a complete price graph with historical Warbond CCU data from [scorg.tools](https://scorg.tools/ccu).
 
 ## Features
