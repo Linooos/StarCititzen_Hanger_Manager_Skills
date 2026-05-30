@@ -1,0 +1,14 @@
+{
+  "ships.json": {
+    "updated": "2026-05-30T09:14:17.367Z",
+    "source": "scrape:ships"
+  },
+  "i18n.json": {
+    "updated": "2026-05-30T09:14:48.791Z",
+    "source": "i18n:setup"
+  },
+  "historical_ccus.json": {
+    "updated": "2026-05-30T09:20:26.425Z",
+    "source": "scrape:historical"
+  }
+}

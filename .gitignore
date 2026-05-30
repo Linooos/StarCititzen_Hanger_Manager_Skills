@@ -1,6 +1,11 @@
 node_modules/
 user_data/
-output/
+output/hangar_items.*
+output/ccu_analysis.json
+output/custom_ccus.json
+output/global.ini
+output/store_products.json
+output/excluded_ccus.json
 *.log
 .env
 cookies.json
