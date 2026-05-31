@@ -1,6 +1,6 @@
 # Foundation / 基础功能
 
-> 项目根目录：`D:/WindowsFiles/Users/Stainless_Kettle/Desktop/1`
+> 项目根目录：`当前目录`
 
 ## 启动检查
 
